@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------- secrets
+# Never commit these. .env holds the OpenRouter key and the auth-mode switch.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ------------------------------------------------------------ environments
+.venv/
+venv/
+env/
+ENV/
+node_modules/
+
+# ------------------------------------------------------- runtime artefacts
+# Local database, uploaded documents, generated versions, signatures.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.storage/
+.cache/
+.session_history/
+logs/
+*.log
+
+# ------------------------------------------------------------------ builds
+dist/
+build/
+*.egg-info/
+frontend/dist/
+frontend/stats.html
+
+# ------------------------------------------------------------------ python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+pytest-cache-files-*/
+
+# -------------------------------------------------------------------- node
+npm-debug.log*
+yarn-error.log*
+.vite/
+
+# --------------------------------------------------------------------- ide
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --------------------------------------------------------------------- os
+.DS_Store
+Thumbs.db
+desktop.ini
