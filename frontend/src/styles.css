@@ -251,7 +251,14 @@ label.field > span {
   border-bottom: 1px solid var(--line);
   box-shadow: var(--e1);
   z-index: 20;
+  /* Nothing in the header may push the document wider than the viewport: a
+     mobile browser responds by shrinking the entire page, which moves every
+     fixed element out of place. */
+  min-width: 0;
+  overflow: hidden;
 }
+.topbar > * { flex: none; }
+.topbar .brand { min-width: 0; }
 .brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 700; }
 .brand .mark {
   width: 30px; height: 30px; border-radius: 9px;
@@ -411,7 +418,15 @@ label.field > span {
   align-items: center;
   gap: 1.5rem;
   min-width: 0;
+  /* A page zoomed past the viewport must scroll inside this pane. Letting it
+     escape widens the whole document, and on a phone the browser then enlarges
+     the layout viewport to match — which silently misplaces every fixed
+     element on the screen. */
+  overscroll-behavior-x: contain;
 }
+/* Pages are centred, but a page wider than the pane must start at its left
+   edge rather than have its first characters pushed off-screen by centring. */
+.canvas-area > * { flex: none; margin-inline: auto; }
 
 .page-shell {
   position: relative;
@@ -519,7 +534,11 @@ label.field > span {
   border-bottom: 1px solid var(--line);
   flex: none;
   overflow-x: auto;
+  /* Without this the strip is sized by its content in a flex column and the
+     scroller never engages, so the buttons push the document wider instead. */
+  min-width: 0;
 }
+.toolstrip > * { flex: none; }
 .tool {
   display: inline-flex;
   align-items: center;
@@ -640,7 +659,15 @@ label.field > span {
   border-top: 1px solid var(--line);
   font-size: 0.72rem;
   color: var(--ink-mute);
+  /* Page counts, version counts and the save state do not fit side by side on
+     a phone. Left to overflow visibly they widen the whole document, and a
+     mobile browser then shrinks the entire page to fit the excess. Scrolling
+     inside the bar keeps the overflow local. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.statusbar::-webkit-scrollbar { display: none; }
+.statusbar > * { flex: none; }
 
 /* --------------------------------------------------------------- modal */
 
@@ -701,12 +728,62 @@ label.field > span {
   }
 }
 
-@media (max-width: 1100px) {
-  .rail { display: none; }
+/* ---------------------------------------------------------------- small screens
+
+   These used to be `display: none`, which removed the thumbnail rail below
+   1100px and every tool below 860px — the whole app became a read-only viewer
+   on a tablet. They are drawers now: off-canvas by default, slid in over the
+   page when opened, and dismissed by tapping the backdrop. Nothing is removed,
+   only moved. */
+
+.drawer-toggles { display: none; gap: 0.4rem; }
+.drawer-backdrop { display: none; }
+
+@media (max-width: 700px) {
+  .hide-narrow { display: none; }
+  /* The open-access warning stays — it is the one thing that must survive
+     every breakpoint — but it can afford to be terse. */
+  .open-pill { font-size: 0.62rem; padding: 0.2rem 0.45rem; }
 }
-@media (max-width: 860px) {
-  .panel { display: none; }
+
+@media (max-width: 1100px) {
+  .drawer-toggles { display: inline-flex; }
+
+  .rail, .panel {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    width: min(88vw, 340px);
+    box-shadow: 0 0 40px rgb(15 23 42 / 22%);
+    transition: transform 0.22s ease;
+  }
+  .rail  { left: 0;  transform: translateX(-102%); }
+  .panel { right: 0; transform: translateX(102%); width: min(92vw, 380px); }
+
+  .rail.open, .panel.open { transform: translateX(0); }
+
+  .drawer-backdrop.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgb(15 23 42 / 38%);
+  }
+
   .canvas-area { padding: 0.75rem; }
+}
+
+/* Coarse pointers need targets that a fingertip can actually hit. 44px is the
+   figure both Apple and Google publish, and it is the one worth honouring. */
+@media (pointer: coarse) {
+  .btn, .panel-tabs button, .doc-actions .btn {
+    min-height: 44px;
+    padding-inline: 0.85rem;
+  }
+  .btn.sm { min-height: 38px; }
+  input[type="checkbox"] { width: 20px; height: 20px; }
+  .thumb { scroll-margin: 12px; }
 }
 
 /* Open-access indicator.

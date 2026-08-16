@@ -3,7 +3,7 @@
 A document intelligence platform: read, analyse, edit, convert, redact, sign
 and translate PDFs.
 
-FastAPI backend, React + PDF.js frontend, background worker. 508 tests.
+FastAPI backend, React + PDF.js frontend, background worker. 549 tests.
 
 ---
 
@@ -38,11 +38,9 @@ cd frontend && npm run dev
 SQLite and local disk are the defaults, so a clone runs with no database or
 object store to set up.
 
-`DOCINTEL_DATABASE_URL` accepts any SQLAlchemy URL, including Postgres, but
-**no Postgres driver ships in `requirements.txt`** — install `psycopg[binary]`
-yourself before pointing it there. Storage and queue currently have one working
-driver each: `local` and `database`. Selecting `s3` or `rq` raises a clear error
-at startup rather than degrading quietly. See [Not built](#not-built).
+Postgres and S3 are implemented and tested but not switched on — see
+[Built but not configured](#built-but-not-configured) for the two variables
+and the one extra install that turn them on.
 
 ---
 
@@ -75,6 +73,10 @@ text, Markdown, CSV and images to PDF.
 **Translate** — whole document or selected pages, with a shared glossary so
 terminology stays consistent.
 
+**On a phone** — the thumbnail rail and the tools panel become drawers rather
+than disappearing, the first page is fitted to the viewport width, and every
+drag gesture (page reorder, region snapshot, signing) works by touch.
+
 ---
 
 ## Things this project is deliberately honest about
@@ -84,6 +86,11 @@ These are design decisions, not oversights.
 **Nothing overwrites your document.** Every operation appends a version. The
 original is always downloadable, and restore is additive so it can itself be
 undone.
+
+**Drafts are local, and say so.** Form entries and unbuilt form-builder fields
+are kept in your browser as you type, so a refresh does not lose them. They are
+never written to the document until you save, and the panel says exactly that
+rather than implying the file has changed.
 
 **Conversion fidelity is stated, not implied.** A PDF does not record
 paragraphs, headings or table structure. Every conversion target declares
@@ -144,8 +151,8 @@ so tenant isolation still applies and is tested in that mode. The server
 ## Testing
 
 ```bash
-.venv\Scripts\python -m pytest tests/ test_app.py -q    # 488 backend
-cd frontend && npm test                                 # 20 frontend
+.venv\Scripts\python -m pytest tests/ test_app.py -q    # 504 backend
+cd frontend && npm test                                 # 45 frontend
 ```
 
 Tests open their outputs with the library that owns the format — python-docx
@@ -178,28 +185,42 @@ it would have provided is covered above.
 
 ---
 
+## Built but not configured
+
+Working code, switched off. Set the variable and install the extra when you
+want it; the defaults stay SQLite and local disk until you do.
+
+```bash
+pip install -r requirements-deploy.txt
+```
+
+**Postgres.** Set `DOCINTEL_DATABASE_URL` to a `postgresql+psycopg://` URL. The
+schema and every query are engine-agnostic, and job claiming uses a
+conditional `UPDATE` rather than anything SQLite-specific, so the migrations
+apply unchanged.
+
+**S3 and S3-compatible storage.** Set `DOCINTEL_STORAGE_DRIVER=s3` and
+`DOCINTEL_S3_BUCKET`, plus `DOCINTEL_S3_ENDPOINT_URL` for MinIO, R2 or B2.
+Credentials are never read from application config — boto3 resolves them from
+the environment, shared config or the instance role, so a deployment on EC2 or
+ECS stores no secrets. 14 tests cover the driver, including that a permissions
+failure is never mistaken for a missing object.
+
+---
+
 ## Not built
 
 Stated plainly so nothing here reads as finished when it is not.
 
-**Autosave.** Every operation appends a version, and versions are listed and
-restorable, but there is no autosave-on-edit and no saved-state indicator.
-
-**Touch input.** The layout is responsive, but two interactions are mouse-only
-and will not work on a touch device: page reorder uses HTML5 drag events, and
-region snapshot uses mousedown/mouseup. Signature drawing is the one surface
-with touch handlers. Treat the viewer as desktop-only for now.
-
-**S3 storage and the `rq` queue.** The provider abstractions exist and the
-config accepts both values, but only `local` and `database` are implemented.
-The others raise at startup with a message naming what is available.
-
-**Postgres driver.** The code is engine-agnostic and the URL is honoured, but
-`psycopg` is not in `requirements.txt`; install it before switching.
-
 **Cryptographic (PAdES) signatures.** Signing applies a visible signature and
 a tamper-evident audit trail. It is not a cryptographic digital signature and
 does not claim to be.
+
+**An `rq`/Redis queue, deliberately.** Job state, progress and retry counts
+live in the jobs table because the API reads them there. An external broker
+would still need those rows, leaving two systems tracking one job. The
+database queue claims work with a conditional `UPDATE`, which is safe across
+processes without a broker.
 
 `app.py` is the original single-user Streamlit prototype, kept for reference.
 It is not part of the platform.

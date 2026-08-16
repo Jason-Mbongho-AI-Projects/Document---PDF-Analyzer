@@ -136,7 +136,9 @@ export default function App() {
           </span>
         )}
 
-        <span className="small muted">{user?.email}</span>
+        {/* Hidden on narrow screens: it is the widest thing in the bar and the
+            least load-bearing, and letting it overflow widens the document. */}
+        <span className="small muted hide-narrow">{user?.email}</span>
         {token ? (
           <button className="btn sm ghost" onClick={() => api.logout()}>Sign out</button>
         ) : (

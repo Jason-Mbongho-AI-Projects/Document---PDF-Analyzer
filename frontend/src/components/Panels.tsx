@@ -7,6 +7,9 @@ import {
   api, type Annotation, type FormReport, type RedactCandidate,
   type SearchMatch, type SecurityReport,
 } from "../api";
+import {
+  clearDraft, readDraft, useAutosaveDraft, type DraftStatus,
+} from "../useDraft";
 
 // ------------------------------------------------------------- comments
 
@@ -210,14 +213,38 @@ export function FormPanel({
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [recovered, setRecovered] = useState(false);
+
+  const draft = useAutosaveDraft(
+    "form", documentId, values,
+    (v) => Object.values(v).every((entry) => !entry),
+  );
 
   async function load() {
     try {
       const result = await api.form(documentId);
       setReport(result);
-      setValues(Object.fromEntries(
+
+      const onDocument = Object.fromEntries(
         result.fields.filter((f) => f.value).map((f) => [f.name, f.value as string]),
-      ));
+      );
+
+      // A draft is unsubmitted typing, so it wins over the values already in
+      // the file — but only for fields the form still has. A field removed
+      // since the draft was written must not be resurrected into the payload.
+      const saved = readDraft<Record<string, string>>("form", documentId);
+      if (saved) {
+        const names = new Set(result.fields.map((f) => f.name));
+        const usable = Object.fromEntries(
+          Object.entries(saved).filter(([name, value]) => names.has(name) && value),
+        );
+        if (Object.keys(usable).length) {
+          setValues({ ...onDocument, ...usable });
+          setRecovered(true);
+          return;
+        }
+      }
+      setValues(onDocument);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -242,6 +269,10 @@ export function FormPanel({
     setError("");
     try {
       const result = await api.fillForm(documentId, values, flatten);
+      // The values are on the document now, so the local draft has served its
+      // purpose. Clearing it before reloading stops load() offering it back.
+      clearDraft("form", documentId);
+      setRecovered(false);
       onFilled(result.note || `Saved as version ${result.version}`);
       await load();
     } catch (e) {
@@ -254,6 +285,22 @@ export function FormPanel({
   return (
     <>
       <div className="small muted" style={{ marginBottom: 10 }}>{report.note}</div>
+
+      {recovered && (
+        <div className="notice" style={{ marginBottom: 10 }}>
+          <span className="small">Unsubmitted entries from this browser were restored.</span>
+          <button
+            className="btn sm ghost"
+            onClick={() => {
+              draft.discard();
+              setRecovered(false);
+              load();
+            }}
+          >
+            Discard draft
+          </button>
+        </div>
+      )}
 
       {report.fields.map((field) => (
         <label key={field.name} className="field">
@@ -312,9 +359,24 @@ export function FormPanel({
           title="Write values in and remove the interactive layer">
           Save flattened
         </button>
+        <div style={{ flex: 1 }} />
+        <DraftIndicator status={draft.status} />
       </div>
+
+      <p className="small muted" style={{ marginBottom: 0 }}>
+        Entries are kept in this browser as you type. They are only written to
+        the document when you save.
+      </p>
     </>
   );
+}
+
+/** Shared "kept locally" indicator. Renders nothing when there is no news. */
+export function DraftIndicator({ status }: { status: DraftStatus }) {
+  if (status === "clean") return null;
+  return status === "saving"
+    ? <span className="small muted">Keeping draft…</span>
+    : <span className="small" style={{ color: "var(--ok)" }}>Draft kept</span>;
 }
 
 // ------------------------------------------------------------ redaction

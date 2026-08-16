@@ -133,27 +133,39 @@ export function PdfPage({
   }, [near, page, scale, width, height, viewport.height]);
 
   // --- snapshot drag ---------------------------------------------------
+  //
+  // Pointer events rather than mouse events, so a finger or stylus draws the
+  // capture region exactly like a mouse does. The pointer is captured on down,
+  // which keeps the drag alive if it leaves the page bounds mid-gesture, and
+  // `touch-action: none` stops the browser from panning the document instead
+  // of giving us the move events.
 
-  function localPoint(event: React.MouseEvent) {
+  function localPoint(event: React.PointerEvent) {
     const box = shellRef.current!.getBoundingClientRect();
     return { x: event.clientX - box.left, y: event.clientY - box.top };
   }
 
-  function onMouseDown(event: React.MouseEvent) {
+  function onPointerDown(event: React.PointerEvent) {
     if (!snapshotMode) return;
+    // Ignore secondary mouse buttons and any second finger of a pinch.
+    if (event.button !== 0 || !event.isPrimary) return;
     event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
     const p = localPoint(event);
     setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
   }
 
-  function onMouseMove(event: React.MouseEvent) {
+  function onPointerMove(event: React.PointerEvent) {
     if (!drag) return;
     const p = localPoint(event);
     setDrag({ ...drag, x1: p.x, y1: p.y });
   }
 
-  function onMouseUp() {
+  function onPointerUp(event: React.PointerEvent) {
     if (!drag) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     const x = Math.min(drag.x0, drag.x1);
     const y = Math.min(drag.y0, drag.y1);
     const w = Math.abs(drag.x1 - drag.x0);
@@ -171,12 +183,14 @@ export function PdfPage({
     <div
       ref={shellRef}
       className="page-shell"
-      style={{ width, height }}
+      // Only claim the gesture while capturing a region; otherwise the page
+      // must stay scrollable and text must stay selectable by touch.
+      style={{ width, height, touchAction: snapshotMode ? "none" : undefined }}
       data-page={pageNumber}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={() => setDrag(null)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => setDrag(null)}
     >
       <canvas ref={canvasRef} />
 

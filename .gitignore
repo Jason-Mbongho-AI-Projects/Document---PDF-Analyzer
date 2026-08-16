@@ -32,6 +32,8 @@ build/
 *.egg-info/
 frontend/dist/
 frontend/stats.html
+# Incremental typecheck cache — machine-local, changes on every build.
+*.tsbuildinfo
 
 # ------------------------------------------------------------------ python
 __pycache__/

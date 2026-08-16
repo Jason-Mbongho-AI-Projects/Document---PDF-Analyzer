@@ -1,0 +1,23 @@
+# Optional dependencies for a server deployment.
+#
+# Nothing here is needed to run DocIntel locally: the defaults are SQLite and
+# local disk, and requirements.txt alone covers them. Install this file only
+# when switching a driver over, and set the matching DOCINTEL_* variables at
+# the same time -- installing the package changes nothing on its own.
+#
+#   pip install -r requirements-deploy.txt
+#
+# Postgres. Set DOCINTEL_DATABASE_URL, e.g.
+#   postgresql+psycopg://user:password@host:5432/docintel
+# The schema and every query are engine-agnostic SQLAlchemy, and job claiming
+# uses a conditional UPDATE rather than anything SQLite-specific, so the same
+# migrations apply unchanged.
+psycopg[binary]>=3.1
+
+# S3 or any S3-compatible store (MinIO, Cloudflare R2, Backblaze B2).
+# Set DOCINTEL_STORAGE_DRIVER=s3 and DOCINTEL_S3_BUCKET, plus
+# DOCINTEL_S3_ENDPOINT_URL for a non-AWS endpoint.
+# Credentials are NOT read from application config -- boto3 resolves them from
+# the environment, shared config or the instance role, so a deployment on EC2
+# or ECS needs no stored secrets.
+boto3>=1.34

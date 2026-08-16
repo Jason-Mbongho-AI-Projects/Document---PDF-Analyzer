@@ -134,9 +134,15 @@ class LocalStorageProvider(StorageProvider):
 def get_storage() -> StorageProvider:
     if settings.storage_driver == "local":
         return LocalStorageProvider()
+    if settings.storage_driver == "s3":
+        # Imported here, not at module scope: the S3 driver pulls in boto3, and
+        # a local clone must not need it to start.
+        from docintel.storage.s3 import S3StorageProvider
+
+        return S3StorageProvider()
     raise StorageError(
-        f"storage driver '{settings.storage_driver}' is configured but not implemented. "
-        "Only 'local' is available."
+        f"storage driver '{settings.storage_driver}' is not recognised. "
+        "Available drivers: local, s3."
     )
 
 

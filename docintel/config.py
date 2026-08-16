@@ -56,10 +56,18 @@ class Settings(BaseSettings):
     storage_root: Path = ROOT / ".storage"
     s3_bucket: str = ""
     s3_region: str = ""
+    # Point at MinIO, R2 or B2 to use an S3-compatible store instead of AWS.
+    # Credentials are never held here — boto3 resolves them from the
+    # environment, shared config or the instance role.
+    s3_endpoint_url: str = ""
 
     # --- queue ----------------------------------------------------------
-    queue_driver: Literal["database", "rq"] = "database"
-    redis_url: str = ""
+    # Only 'database' exists, and the option is deliberately not widened. Job
+    # state, progress and retry counts live in the jobs table because the API
+    # reads them there; an rq backend would still need those rows, leaving two
+    # systems tracking one job. The database queue claims work with a
+    # conditional UPDATE, which is safe across processes without a broker.
+    queue_driver: Literal["database"] = "database"
     worker_poll_seconds: float = 1.0
     job_max_attempts: int = 3
     job_timeout_seconds: int = 900
