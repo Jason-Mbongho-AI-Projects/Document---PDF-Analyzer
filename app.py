@@ -68,31 +68,82 @@ def _is_hosted() -> bool:
     return __file__.replace("\\", "/").startswith("/mount/src")
 
 
+# Spellings accepted for the key. People reasonably write the name a few
+# different ways, and a key that is present but spelled differently should be
+# found rather than reported as missing.
+_KEY_NAMES = ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_APIKEY")
+
+
+def _clean(value) -> str:
+    """Trim whitespace and any quotes that came along with a paste.
+
+    Pasting `OPENROUTER_API_KEY = "sk-..."` into a form that already implies
+    the quoting leaves them embedded in the value, which then fails
+    authentication with an error that names nothing useful.
+    """
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
+
+
+def _secrets_snapshot() -> tuple[dict, list[str]]:
+    """Return (flattened secrets, section names). Never returns any values."""
+    flat, sections = {}, []
+    try:
+        raw = dict(st.secrets)
+    except Exception:
+        # No secrets configured at all — normal locally.
+        return {}, []
+
+    for name, value in raw.items():
+        if hasattr(value, "items"):          # a [section] in the TOML
+            sections.append(str(name))
+            for inner, inner_value in dict(value).items():
+                flat.setdefault(str(inner), inner_value)
+        else:
+            flat[str(name)] = value
+    return flat, sections
+
+
+def _resolve_api_key() -> tuple[str, str]:
+    """Find the key wherever it was put. Returns (key, human-readable source)."""
+    load_dotenv()
+
+    for name in _KEY_NAMES:
+        found = os.getenv(name)
+        if found and _clean(found):
+            return _clean(found), "environment"
+
+    # Streamlit Cloud also exposes secrets as environment variables, but only
+    # once the runtime is up, so read st.secrets directly too. Sections are
+    # flattened because a key filed under [general] is still the key.
+    flat, _ = _secrets_snapshot()
+    lowered = {k.lower(): v for k, v in flat.items()}
+    for name in _KEY_NAMES:
+        if name.lower() in lowered:
+            cleaned = _clean(lowered[name.lower()])
+            if cleaned:
+                # Publish it so Config and the summariser, which both read the
+                # environment, see the same key this check accepted.
+                os.environ["OPENROUTER_API_KEY"] = cleaned
+                Config.OPENROUTER_API_KEY = cleaned
+                return cleaned, "Streamlit secrets"
+
+    return "", ""
+
+
 def api_key_ready() -> tuple[bool, str, str]:
     """Return (ok, badge_kind, message) for the credential panel."""
-    load_dotenv()
-    key = os.getenv("OPENROUTER_API_KEY")
-
-    # Streamlit Cloud exposes secrets as environment variables, but only after
-    # the runtime starts. Fall back to st.secrets so the key is found whichever
-    # way it was provided.
-    if not key:
-        try:
-            key = st.secrets.get("OPENROUTER_API_KEY")  # type: ignore[union-attr]
-        except Exception:
-            # No secrets.toml at all — a perfectly normal local setup.
-            key = None
-        if key:
-            # Publish it so Config and the summariser, which both read the
-            # environment, see the same key this check just accepted.
-            os.environ["OPENROUTER_API_KEY"] = str(key)
-            Config.OPENROUTER_API_KEY = str(key)
+    key, source = _resolve_api_key()
 
     if not key:
         return False, "bad", "No API key found"
+    if not key.startswith("sk-"):
+        return False, "warn", "Key does not look like an OpenRouter key"
     if len(key) < 30:
         return False, "warn", "Key looks truncated"
-    return True, "ok", f"Connected · …{key[-4:]}"
+    return True, "ok", f"Connected · …{key[-4:]} ({source})"
 
 
 @st.cache_resource
@@ -490,6 +541,57 @@ def render_security(uploaded_file) -> None:
         )
 
 
+def _render_key_diagnostics() -> None:
+    """Show where the key was looked for and what was actually there.
+
+    "No API key found" when you have just added one is a dead end: the usual
+    causes are a name that does not match, a value filed under a [section]
+    header, quotes carried in from a paste, or the app not having restarted.
+    None of those are distinguishable from the outside, so the app reports
+    what it can see.
+
+    Secret NAMES are shown; values never are.
+    """
+    flat, sections = _secrets_snapshot()
+
+    with st.expander("Already added it? What this app can see"):
+        env_names = [n for n in _KEY_NAMES if os.getenv(n)]
+        env_line = (
+            "found " + ", ".join(env_names) if env_names
+            else "none of " + ", ".join(_KEY_NAMES)
+        )
+        secrets_line = f"{len(flat)} entry(ies)" if flat else "none configured"
+        if sections:
+            secrets_line += " across sections " + ", ".join(sections)
+
+        st.markdown(
+            f"- **Environment variables**: {env_line}\n"
+            f"- **Streamlit secrets**: {secrets_line}"
+        )
+
+        if flat:
+            st.markdown("Secret names visible to the app (values not shown):")
+            st.code("\n".join(sorted(flat)), language="text")
+            st.caption(
+                "Any of " + ", ".join(_KEY_NAMES) + " is accepted, in any "
+                "capitalisation, at the top level or inside a section."
+            )
+        else:
+            st.caption(
+                "Nothing at all is configured. On Streamlit Cloud, secrets are "
+                "under Manage app → Settings → Secrets; the app must restart "
+                "after saving them."
+            )
+
+        st.markdown(
+            "Most common causes, in order:\n"
+            "1. The app has not restarted since the secret was saved — reboot it.\n"
+            "2. The name differs from the ones listed above.\n"
+            "3. The value was pasted with quotes or spaces inside it.\n"
+            "4. It was saved to a different app or a different branch."
+        )
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
@@ -518,6 +620,8 @@ def main():
             ui.empty("🔑", "Add OPENROUTER_API_KEY to your .env",
                      "Create a .env file next to app.py containing OPENROUTER_API_KEY=… — "
                      "keys are issued at openrouter.ai/keys.")
+
+        _render_key_diagnostics()
         return
 
     ui.section("↑", "Source document",
