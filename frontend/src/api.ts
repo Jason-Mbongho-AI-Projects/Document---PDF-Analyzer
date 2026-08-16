@@ -50,7 +50,7 @@ async function handle(response: Response) {
     throw new ApiError(401, "Your session has expired. Please sign in again.");
   }
   if (!response.ok) {
-    let detail = `Request failed (${response.status})`;
+    let detail = "";
     try {
       const body = await response.json();
       if (typeof body?.detail === "string") detail = body.detail;
@@ -58,7 +58,19 @@ async function handle(response: Response) {
         detail = body.errors.map((e: any) => e.msg ?? String(e)).join("; ");
       }
     } catch {
-      /* non-JSON error body; keep the generic message */
+      /* non-JSON error body — handled below */
+    }
+
+    // The API answers every error with a JSON `detail`. A 5xx without one did
+    // not come from the API at all: it is the dev proxy reporting that it
+    // could not reach the backend. "Request failed (500)" sends people looking
+    // for a bug in the feature they just clicked, when the server is simply
+    // not running.
+    if (!detail) {
+      detail = response.status >= 500
+        ? `The API did not respond (${response.status}). It may not be running — ` +
+          "start it with: python -m uvicorn docintel.main:app --port 8000"
+        : `Request failed (${response.status})`;
     }
     throw new ApiError(response.status, detail);
   }

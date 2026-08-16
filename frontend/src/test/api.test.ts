@@ -90,7 +90,10 @@ describe("error handling", () => {
     await expect(api.workspaces()).rejects.toThrow("email invalid; password short");
   });
 
-  it("falls back to a generic message when the body is not JSON", async () => {
+  it("says the API is not responding when a 5xx carries no JSON detail", async () => {
+    // The API always sends a JSON `detail`. A 5xx without one comes from the
+    // dev proxy failing to reach the backend, so the message must point at the
+    // dead server rather than at whatever feature the user just clicked.
     globalThis.fetch = vi.fn(async () =>
       ({
         ok: false, status: 500, headers: new Headers(),
@@ -98,7 +101,29 @@ describe("error handling", () => {
       }) as unknown as Response,
     ) as unknown as typeof fetch;
 
-    await expect(api.workspaces()).rejects.toThrow("Request failed (500)");
+    await expect(api.workspaces()).rejects.toThrow(/API did not respond \(500\)/);
+    await expect(api.workspaces()).rejects.toThrow(/uvicorn/);
+  });
+
+  it("keeps a real API error message instead of the not-responding hint", async () => {
+    mockFetch({
+      ok: false, status: 503,
+      jsonBody: { detail: "No OCR engine is installed on this server." },
+    });
+
+    await expect(api.workspaces())
+      .rejects.toThrow("No OCR engine is installed on this server.");
+  });
+
+  it("still reports a plain 4xx generically", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      ({
+        ok: false, status: 418, headers: new Headers(),
+        json: async () => { throw new Error("not json"); },
+      }) as unknown as Response,
+    ) as unknown as typeof fetch;
+
+    await expect(api.workspaces()).rejects.toThrow("Request failed (418)");
   });
 
   it("signs the user out on 401 rather than leaving a dead token", async () => {

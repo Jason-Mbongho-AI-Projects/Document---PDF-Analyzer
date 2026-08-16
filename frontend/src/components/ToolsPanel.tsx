@@ -9,11 +9,23 @@
 import { useEffect, useState } from "react";
 import { api, type OcrAssessment, type TranslationResult } from "../api";
 
+// English is first, and deliberately present: the list used to assume every
+// document was already in English, so a German or Spanish source could be
+// translated into anything except the language most people wanted.
+//
+// The API accepts any language name, so this list is a convenience rather than
+// a limit — hence the free-text box beside it for anything not listed.
 const LANGUAGES = [
-  "French", "German", "Spanish", "Italian", "Portuguese", "Dutch",
-  "Polish", "Arabic", "Hindi", "Japanese", "Korean",
-  "Simplified Chinese", "Traditional Chinese",
+  "English", "French", "German", "Spanish", "Italian", "Portuguese", "Dutch",
+  "Polish", "Romanian", "Swedish", "Danish", "Norwegian", "Finnish",
+  "Czech", "Greek", "Turkish", "Russian", "Ukrainian",
+  "Arabic", "Hebrew", "Hindi", "Bengali", "Urdu",
+  "Japanese", "Korean", "Simplified Chinese", "Traditional Chinese",
+  "Vietnamese", "Thai", "Indonesian", "Swahili",
 ];
+
+/** Sentinel for the dropdown entry that reveals the free-text box. */
+const OTHER = "Other…";
 
 export function TranslatePanel({
   documentId, pageCount, onSaved,
@@ -22,7 +34,8 @@ export function TranslatePanel({
   pageCount: number;
   onSaved: (message: string) => void;
 }) {
-  const [language, setLanguage] = useState("French");
+  const [language, setLanguage] = useState("English");
+  const [custom, setCustom] = useState("");
   const [scope, setScope] = useState<"all" | "pages">("all");
   const [pageSpec, setPageSpec] = useState("1");
   const [busy, setBusy] = useState(false);
@@ -43,10 +56,17 @@ export function TranslatePanel({
     return [...wanted].filter((p) => p >= 1 && p <= pageCount).sort((a, b) => a - b);
   }
 
+  /** The typed language wins when the dropdown is set to "Other…". */
+  const target = language === OTHER ? custom.trim() : language;
+
   async function run() {
     const pages = parsePages();
     if (scope === "pages" && (!pages || pages.length === 0)) {
       setError("No valid pages in that range.");
+      return;
+    }
+    if (!target) {
+      setError("Type the language you want to translate into.");
       return;
     }
 
@@ -54,7 +74,7 @@ export function TranslatePanel({
     setError("");
     setResult(null);
     try {
-      const translated = await api.translate(documentId, language, pages);
+      const translated = await api.translate(documentId, target, pages);
       setResult(translated);
       if (translated.version) {
         onSaved(`Translation saved as version ${translated.version}`);
@@ -73,8 +93,21 @@ export function TranslatePanel({
         <select className="input" value={language}
           onChange={(e) => setLanguage(e.target.value)}>
           {LANGUAGES.map((l) => <option key={l} value={l}>{l}</option>)}
+          <option value={OTHER}>{OTHER}</option>
         </select>
       </label>
+
+      {language === OTHER && (
+        <label className="field">
+          <span>Which language?</span>
+          <input
+            className="input"
+            value={custom}
+            placeholder="e.g. Icelandic, Tagalog, Latin American Spanish"
+            onChange={(e) => setCustom(e.target.value)}
+          />
+        </label>
+      )}
 
       <label className="field">
         <span>Scope</span>
@@ -109,17 +142,19 @@ export function TranslatePanel({
         <div style={{ marginTop: "1rem" }}>
           <div className="notice" style={{ marginBottom: "0.7rem" }}>{result.note}</div>
 
-          {Object.keys(result.glossary).length > 0 && (
+          {/* Defensive: a response without a glossary or pages is unexpected,
+              but it must not take the whole panel down with it. */}
+          {Object.keys(result.glossary ?? {}).length > 0 && (
             <>
               <div className="meta">Glossary used for consistency</div>
-              {Object.entries(result.glossary).slice(0, 12).map(([from, to]) => (
+              {Object.entries(result.glossary ?? {}).slice(0, 12).map(([from, to]) => (
                 <div key={from} className="small muted">{from} → {to}</div>
               ))}
             </>
           )}
 
           <div className="meta" style={{ marginTop: 10 }}>Translated pages</div>
-          {result.pages.map((page) => (
+          {(result.pages ?? []).map((page) => (
             <div key={page.page} className="item" style={{ cursor: "default" }}>
               <div className="meta">Page {page.page}</div>
               <div className="text" style={{ whiteSpace: "pre-wrap" }}>
