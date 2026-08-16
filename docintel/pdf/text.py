@@ -22,7 +22,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 import pypdfium2 as pdfium
 
-from docintel.pdf.engine import PDFEngineError, PasswordRequired
+from docintel.pdf.engine import PDFIUM_LOCK, PDFEngineError, PasswordRequired
 
 # A run of characters is split into words on whitespace, and also when the
 # horizontal gap exceeds this multiple of the character height — some PDFs
@@ -170,34 +170,35 @@ def _group_words(textpage, page_number: int) -> Tuple[str, List[Word]]:
 
 def extract(data: bytes, pages: Optional[List[int]] = None,
             password: Optional[str] = None) -> List[PageText]:
-    """Extract text and word geometry, one page at a time."""
-    pdf = _open(data, password)
-    try:
-        total = len(pdf)
-        targets = pages or list(range(1, total + 1))
+    with PDFIUM_LOCK:
+        """Extract text and word geometry, one page at a time."""
+        pdf = _open(data, password)
+        try:
+            total = len(pdf)
+            targets = pages or list(range(1, total + 1))
 
-        results: List[PageText] = []
-        for number in targets:
-            if number < 1 or number > total:
-                raise PDFEngineError(f"Page {number} is out of range (1..{total}).")
+            results: List[PageText] = []
+            for number in targets:
+                if number < 1 or number > total:
+                    raise PDFEngineError(f"Page {number} is out of range (1..{total}).")
 
-            page = pdf[number - 1]
-            textpage = page.get_textpage()
-            try:
-                text, words = _group_words(textpage, number)
-            finally:
-                textpage.close()
+                page = pdf[number - 1]
+                textpage = page.get_textpage()
+                try:
+                    text, words = _group_words(textpage, number)
+                finally:
+                    textpage.close()
 
-            results.append(PageText(
-                page=number,
-                width=page.get_width(),
-                height=page.get_height(),
-                text=text,
-                words=words,
-            ))
-        return results
-    finally:
-        pdf.close()
+                results.append(PageText(
+                    page=number,
+                    width=page.get_width(),
+                    height=page.get_height(),
+                    text=text,
+                    words=words,
+                ))
+            return results
+        finally:
+            pdf.close()
 
 
 def plain_text(data: bytes, password: Optional[str] = None) -> str:
@@ -207,51 +208,52 @@ def plain_text(data: bytes, password: Optional[str] = None) -> str:
 def search(data: bytes, query: str, *, case_sensitive: bool = False,
            whole_words: bool = False, max_results: int = 500,
            password: Optional[str] = None) -> List[Match]:
-    """Find a string, returning highlight rectangles in view coordinates."""
-    if not query.strip():
-        raise PDFEngineError("Search text cannot be empty.")
+    with PDFIUM_LOCK:
+        """Find a string, returning highlight rectangles in view coordinates."""
+        if not query.strip():
+            raise PDFEngineError("Search text cannot be empty.")
 
-    flags = 0 if case_sensitive else re.IGNORECASE
-    pattern = re.escape(query)
-    if whole_words:
-        pattern = rf"\b{pattern}\b"
-    expression = re.compile(pattern, flags)
+        flags = 0 if case_sensitive else re.IGNORECASE
+        pattern = re.escape(query)
+        if whole_words:
+            pattern = rf"\b{pattern}\b"
+        expression = re.compile(pattern, flags)
 
-    matches: List[Match] = []
-    for page in extract(data, password=password):
-        for found in expression.finditer(page.text):
-            if len(matches) >= max_results:
-                return matches
+        matches: List[Match] = []
+        for page in extract(data, password=password):
+            for found in expression.finditer(page.text):
+                if len(matches) >= max_results:
+                    return matches
 
-            start, end = found.start(), found.end()
-            covered = [w for w in page.words if w.start < end and w.end > start]
+                start, end = found.start(), found.end()
+                covered = [w for w in page.words if w.start < end and w.end > start]
 
-            # Group the covering words into per-line rectangles so a match
-            # that wraps produces one box per line, like a real selection.
-            rects: List[Dict[str, float]] = []
-            for word in covered:
-                rect = word.view_rect(page.height)
-                merged = False
-                for existing in rects:
-                    if abs(existing["y"] - rect["y"]) < rect["height"] * 0.6:
-                        right = max(existing["x"] + existing["width"],
-                                    rect["x"] + rect["width"])
-                        existing["x"] = min(existing["x"], rect["x"])
-                        existing["width"] = right - existing["x"]
-                        existing["height"] = max(existing["height"], rect["height"])
-                        merged = True
-                        break
-                if not merged:
-                    rects.append(dict(rect))
+                # Group the covering words into per-line rectangles so a match
+                # that wraps produces one box per line, like a real selection.
+                rects: List[Dict[str, float]] = []
+                for word in covered:
+                    rect = word.view_rect(page.height)
+                    merged = False
+                    for existing in rects:
+                        if abs(existing["y"] - rect["y"]) < rect["height"] * 0.6:
+                            right = max(existing["x"] + existing["width"],
+                                        rect["x"] + rect["width"])
+                            existing["x"] = min(existing["x"], rect["x"])
+                            existing["width"] = right - existing["x"]
+                            existing["height"] = max(existing["height"], rect["height"])
+                            merged = True
+                            break
+                    if not merged:
+                        rects.append(dict(rect))
 
-            left = max(start - 40, 0)
-            right = min(end + 40, len(page.text))
+                left = max(start - 40, 0)
+                right = min(end + 40, len(page.text))
 
-            matches.append(Match(
-                page=page.page, start=start, end=end,
-                text=page.text[start:end],
-                context=" ".join(page.text[left:right].split()),
-                rects=[{k: round(v, 2) for k, v in r.items()} for r in rects],
-            ))
+                matches.append(Match(
+                    page=page.page, start=start, end=end,
+                    text=page.text[start:end],
+                    context=" ".join(page.text[left:right].split()),
+                    rects=[{k: round(v, 2) for k, v in r.items()} for r in rects],
+                ))
 
-    return matches
+        return matches

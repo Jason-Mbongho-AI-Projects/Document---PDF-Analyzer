@@ -24,6 +24,22 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
+import threading
+
+# PDFium is not thread-safe: its own documentation says so, and pypdfium2
+# repeats it. Every caller must serialise access.
+#
+# It matters here because FastAPI runs synchronous endpoints in a thread pool,
+# so two requests that rasterise or read text arrive on different threads and
+# race inside the native library. The failure mode is not an exception but a
+# segmentation fault, which kills the worker process outright — the request
+# that triggers it and everything in flight beside it die together.
+#
+# One lock, shared by every module that touches PDFium, because two separate
+# locks would not exclude each other and the race would simply move.
+PDFIUM_LOCK = threading.RLock()
+
+
 
 class PDFEngineError(RuntimeError):
     """Raised when a PDF cannot be processed. Message is safe to surface."""
