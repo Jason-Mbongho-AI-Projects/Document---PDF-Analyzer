@@ -282,19 +282,65 @@ label.field > span {
 /* ------------------------------------------------------------- library */
 
 .library { flex: 1; overflow: auto; padding: 1.6rem 2rem; }
-.library-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.2rem; }
-.library-head h2 { font-size: 1.2rem; }
+.library { position: relative; }
 
-.dropzone {
-  border: 1.5px dashed var(--line-strong);
-  border-radius: var(--r-lg);
-  background: var(--well);
-  box-shadow: var(--well-shadow);
-  padding: 2rem;
-  text-align: center;
-  transition: border-color 0.25s, background 0.25s, box-shadow 0.25s;
+.library-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
   margin-bottom: 1.4rem;
+  flex-wrap: wrap;
 }
+.library-title { flex: 1; min-width: 200px; }
+.library-title h2 {
+  font-size: 1.65rem;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.library-title p { margin: 0.25rem 0 0; }
+
+.library-controls { display: flex; align-items: center; gap: 0.6rem; }
+.library-controls .search { width: 230px; }
+.library-controls .toggle {
+  white-space: nowrap;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--r-sm);
+}
+.library-controls .toggle:hover { background: var(--surface-3); }
+
+.drop-veil {
+  position: fixed;
+  inset: var(--topbar) 0 0 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  background: rgba(29, 78, 216, 0.08);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.drop-veil-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.6rem 2.4rem;
+  border: 2px dashed var(--blue-hi);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--e3);
+}
+.drop-veil-inner strong { font-size: 1.05rem; }
+
+/* First run. The one screen every trial user sees, so it says what the
+   product does rather than just reporting that a list is empty. */
+.first-run { padding: 4rem 1.5rem; }
+.first-run-mark {
+  font-size: 2.4rem;
+  color: var(--blue);
+  opacity: 0.5;
+  margin-bottom: 0.6rem;
+}
+.first-run p { max-width: 34rem; margin: 0.4rem auto 1.2rem; line-height: 1.6; }
 .dropzone.over {
   border-color: var(--blue-hi);
   background: var(--blue-pale);
@@ -1026,3 +1072,88 @@ label.field > span {
   width: 100%;
   height: 100%;
 }
+
+/* --------------------------------------------------------- card refinement
+   Actions are revealed on hover rather than printed on every card. Twelve
+   cards each showing Open / Archive / Delete is thirty-six competing links;
+   the filename is what you are scanning for, and it should win. Keyboard
+   users get them via :focus-within, so nothing becomes unreachable. */
+
+.doc-grid { gap: 1.15rem; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); }
+
+.doc-card { position: relative; }
+.doc-card .doc-card-top { align-items: center; gap: 0.5rem; }
+.doc-card .doc-open { font-size: 0.92rem; letter-spacing: -0.01em; }
+
+/* The actions sit over the foot of the cover rather than under the card.
+   Hidden but still occupying a row left every card bottom-heavy with empty
+   space; overlaying reclaims it and nothing shifts on hover. */
+.doc-card .doc-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 118px;                     /* the lower band of the 168px cover */
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0 0.4rem;
+  border-top: none;
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.93) 42%);
+  opacity: 0;
+  transition: opacity 0.16s var(--ease);
+}
+.doc-card:hover .doc-actions,
+.doc-card:focus-within .doc-actions { opacity: 1; }
+
+/* Touch has no hover, so the actions simply stay put. */
+@media (pointer: coarse) {
+  .doc-card .doc-actions { opacity: 1; }
+}
+
+/* The selection checkbox is noise until you are selecting; it fades up on
+   hover, and stays visible once something is ticked. */
+.doc-card .doc-card-top input[type="checkbox"] {
+  opacity: 0;
+  transition: opacity 0.16s var(--ease);
+}
+.doc-card:hover .doc-card-top input[type="checkbox"],
+.doc-card:focus-within .doc-card-top input[type="checkbox"],
+.doc-card.picked .doc-card-top input[type="checkbox"] { opacity: 1; }
+@media (pointer: coarse) {
+  .doc-card .doc-card-top input[type="checkbox"] { opacity: 1; }
+}
+
+.doc-card:hover { transform: translateY(-3px); }
+.doc-card .doc-cover { transition: background 0.2s var(--ease); }
+.doc-card:hover .doc-cover { background: var(--surface-3); }
+
+/* ------------------------------------------------------------ top bar trim */
+
+.topbar .brand { gap: 0.55rem; font-size: 0.98rem; letter-spacing: -0.02em; }
+.topbar select.input {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  box-shadow: none;
+  font-weight: 600;
+  font-size: 0.84rem;
+  padding: 0.4rem 0.6rem;
+  max-width: 220px;
+}
+.topbar .doc-title { font-weight: 500; }
+
+/* ------------------------------------------------------------ panel rhythm */
+
+.panel-body { padding: 1rem 1.05rem 1.4rem; }
+.panel-body .meta {
+  font-size: 0.66rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-mute);
+  margin-bottom: 0.45rem;
+}
+.panel-body .field { margin-bottom: 0.7rem; }

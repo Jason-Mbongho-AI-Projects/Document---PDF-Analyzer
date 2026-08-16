@@ -184,7 +184,7 @@ describe("archiving", () => {
     render(<Library workspace={workspace} onOpen={() => {}} notify={notify} />);
     await screen.findByRole("button", { name: "a.pdf" });
 
-    await user.click(screen.getByLabelText(/Show archived/i));
+    await user.click(screen.getByLabelText(/Archived/i));
     await waitFor(() =>
       expect(list).toHaveBeenLastCalledWith("ws1", "", true));
   });

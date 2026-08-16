@@ -126,25 +126,51 @@ export function Library({ workspace, onOpen, notify }: Props) {
   const chosen = documents.filter((d) => selected.has(d.id));
 
   return (
-    <div className="library">
+    <div
+      className={`library ${over ? "dragging" : ""}`}
+      // The whole page is the drop target, which is what people try first.
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer genuinely leaves the library, not when
+        // it crosses between children — otherwise the overlay flickers.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        upload(e.dataTransfer.files);
+      }}
+    >
       <div className="library-head">
-        <h2>{workspace.name}</h2>
-        <span className="badge info">{documents.length} document(s)</span>
-        <div style={{ flex: 1 }} />
+        <div className="library-title">
+          <h2>{workspace.name}</h2>
+          <p className="small muted">
+            {documents.length === 0 ? "No documents yet"
+              : `${documents.length} document${documents.length === 1 ? "" : "s"}`}
+            {showArchived ? " · including archived" : ""}
+          </p>
+        </div>
 
-        <label className="row small muted" style={{ cursor: "pointer" }}>
-          <input type="checkbox" checked={showArchived}
-            onChange={(e) => setShowArchived(e.target.checked)} />
-          Show archived
-        </label>
-
-        <input
-          className="input"
-          style={{ maxWidth: 220 }}
-          placeholder="Search filenames…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div className="library-controls">
+          <input
+            className="input search"
+            placeholder="Search filenames…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search filenames"
+          />
+          <label className="row small muted toggle" style={{ cursor: "pointer" }}>
+            <input type="checkbox" checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)} />
+            Archived
+          </label>
+          {/* Upload is the primary action, so it sits where the eye lands
+              rather than inside a panel competing with the documents. */}
+          <button className="btn primary" disabled={busy}
+            onClick={() => fileRef.current?.click()}>
+            {busy ? "Working…" : "Upload PDFs"}
+          </button>
+        </div>
       </div>
 
       {selected.size > 0 && (
@@ -174,29 +200,43 @@ export function Library({ workspace, onOpen, notify }: Props) {
         </div>
       )}
 
-      <div
-        className={`dropzone ${over ? "over" : ""}`}
-        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files); }}
-      >
-        <input ref={fileRef} type="file" accept="application/pdf" multiple hidden
-          onChange={(e) => upload(e.target.files)} />
-        <p className="muted" style={{ marginTop: 0 }}>Drop PDFs here, or</p>
-        <button className="btn primary" disabled={busy} onClick={() => fileRef.current?.click()}>
-          {busy ? "Working…" : "Choose files"}
-        </button>
-        <p className="small muted" style={{ marginBottom: 0 }}>
-          PDF only. Content is validated by magic bytes, not by filename.
-        </p>
-      </div>
+      <input ref={fileRef} type="file" accept="application/pdf" multiple hidden
+        onChange={(e) => upload(e.target.files)} />
+
+      {/* Dropping still works anywhere on the library. The target only becomes
+          visible while something is being dragged over it — a permanent
+          dashed box takes the top of the page from the documents, which are
+          what the page is for. */}
+      {over && (
+        <div className="drop-veil">
+          <div className="drop-veil-inner">
+            <strong>Drop to upload</strong>
+            <span className="small muted">
+              PDF only — content is checked by magic bytes, not by filename.
+            </span>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="row"><span className="spinner" /> Loading…</div>
       ) : documents.length === 0 ? (
-        <div className="empty">
-          <h4>{showArchived ? "Nothing here" : "No documents yet"}</h4>
-          <p className="small">Upload a PDF to get started.</p>
+        <div className="empty first-run">
+          <div className="first-run-mark" aria-hidden>◈</div>
+          <h4>{showArchived ? "Nothing archived" : "This workspace is empty"}</h4>
+          <p className="small">
+            {showArchived
+              ? "Documents you archive will appear here."
+              : "Drop a PDF anywhere on this page, or upload one to begin. " +
+                "You can read, edit, redact, sign, convert and ask questions " +
+                "about anything you add."}
+          </p>
+          {!showArchived && (
+            <button className="btn primary" disabled={busy}
+              onClick={() => fileRef.current?.click()}>
+              {busy ? "Working…" : "Upload your first PDF"}
+            </button>
+          )}
         </div>
       ) : (
         <div className="doc-grid">
