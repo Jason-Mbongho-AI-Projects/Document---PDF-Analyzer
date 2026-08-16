@@ -30,6 +30,7 @@ import {
   CombinePanel, EditPanel, OrganisePanel, PagesFromPanel,
 } from "../components/OrganisePanel";
 import { DocumentPanel } from "../components/DocumentPanel";
+import { ExtrasPanel } from "../components/ToolsExtraPanel";
 import { TextEditPanel } from "../components/TextEditPanel";
 import { clearDraft, readDraft, useAutosaveDraft } from "../useDraft";
 import { DraftIndicator } from "../components/Panels";
@@ -48,7 +49,8 @@ const PIN = 18;
 type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
   | "security" | "form" | "builder" | "redact" | "convert" | "compare"
   | "sign" | "translate" | "ocr" | "versions"
-  | "organise" | "edit" | "combine" | "text" | "pagesfrom" | "document";
+  | "organise" | "edit" | "combine" | "text" | "pagesfrom" | "document"
+  | "extras";
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
@@ -700,7 +702,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
           <div className="panel-tabs">
             {/* Organise, Edit and Combine lead: they are what people look for
                 first in a PDF tool, and they were the ones missing. */}
-            {(["text", "organise", "pagesfrom", "edit", "combine", "document",
+            {(["text", "organise", "pagesfrom", "edit", "combine", "document", "extras",
               "summarise", "analyse", "ai", "comments", "search", "security",
               "form", "builder", "redact", "convert", "compare", "sign",
               "translate", "ocr", "versions"] as Tab[])
@@ -710,6 +712,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
                 {name === "ai" ? "Ask AI" : name === "ocr" ? "OCR"
                   : name === "pagesfrom" ? "Insert pages"
                   : name === "document" ? "Document"
+                  : name === "extras" ? "Links & files"
                   : name === "builder" ? "Form builder"
                   : name[0].toUpperCase() + name.slice(1)}
               </button>
@@ -734,6 +737,15 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
               <PagesFromPanel
                 documentId={documentId}
                 workspaceId={detail.workspace_id}
+                pageCount={pages.length}
+                onSaved={(message) => reload(message)}
+                notify={notify}
+              />
+            )}
+
+            {tab === "extras" && (
+              <ExtrasPanel
+                documentId={documentId}
                 pageCount={pages.length}
                 onSaved={(message) => reload(message)}
                 notify={notify}

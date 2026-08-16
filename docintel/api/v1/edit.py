@@ -7,10 +7,13 @@ the newly created one, and the source remains downloadable.
 """
 from typing import List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status,
+)
 from pydantic import BaseModel, Field
 
 from docintel.api.schemas import DocumentResponse
+from docintel.config import settings
 from docintel.core.deps import CurrentUser, DbSession, client_ip, require_document
 from docintel.db.models import Document
 from docintel.pdf import forms as form_tools
@@ -1003,3 +1006,262 @@ def set_document_outline(document_id: str, body: OutlineRequest, request: Reques
     session.commit()
     session.refresh(document)
     return _respond(document, result, note=f"{len(entries)} bookmark(s) saved.")
+
+
+# ------------------------------------------------------------------ links
+
+class LinkRequest(BaseModel):
+    page: int = Field(ge=1)
+    rect: dict
+    url: str = Field(min_length=4, max_length=2000)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class RemoveLinksRequest(BaseModel):
+    page: Optional[int] = Field(default=None, ge=1)
+    index: Optional[int] = Field(default=None, ge=0)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+@router.get("/links")
+def get_links(document_id: str, user: CurrentUser, session: DbSession,
+              version: Optional[int] = None) -> dict:
+    """Every link in the document, with where it sits and where it points."""
+    from docintel.pdf import links as link_tools
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    found = _guard(lambda: link_tools.list_links(data))
+    return {"document_id": document.id, "count": len(found), "links": found}
+
+
+@router.post("/links", response_model=VersionResponse)
+def add_link(document_id: str, body: LinkRequest, request: Request,
+             user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Add a clickable area pointing at a URL."""
+    from docintel.pdf import links as link_tools
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+    output = _guard(lambda: link_tools.add_link(
+        data, page=body.page, rect=body.rect, url=body.url))
+
+    result = docsvc.add_version(
+        session, document, output, "link-added",
+        actor=user, action="pdf.link_added", detail=f"page {body.page}",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note=f"Link added to page {body.page}.")
+
+
+@router.post("/links/remove", response_model=VersionResponse)
+def remove_links(document_id: str, body: RemoveLinksRequest, request: Request,
+                 user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Remove one link, or every link when nothing is named."""
+    from docintel.pdf import links as link_tools
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+    output, removed = _guard(lambda: link_tools.remove_links(
+        data, page=body.page, index=body.index))
+
+    result = docsvc.add_version(
+        session, document, output, "links-removed",
+        actor=user, action="pdf.links_removed", detail=f"{removed} link(s)",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note=f"{removed} link(s) removed.")
+
+
+# ------------------------------------------------------------ attachments
+
+@router.get("/attachments")
+def get_attachments(document_id: str, user: CurrentUser, session: DbSession,
+                    version: Optional[int] = None) -> dict:
+    """Files carried inside the document."""
+    from docintel.pdf import attachments as attach_tools
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    found = _guard(lambda: attach_tools.list_attachments(data))
+    return {"document_id": document.id, "count": len(found), "attachments": found}
+
+
+@router.get("/attachments/{name}")
+def download_attachment(document_id: str, name: str, user: CurrentUser,
+                        session: DbSession,
+                        version: Optional[int] = None) -> Response:
+    """Hand back an attachment's bytes.
+
+    Served as an octet-stream download rather than inline: the whole point of
+    the security scanner flagging embedded files is that their contents are
+    not to be trusted, and a browser should not try to render one.
+    """
+    from docintel.pdf import attachments as attach_tools
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    payload, clean = _guard(lambda: attach_tools.extract(data, name))
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{clean}"'},
+    )
+
+
+@router.post("/attachments/remove", response_model=VersionResponse)
+def remove_attachment(document_id: str, request: Request, user: CurrentUser,
+                      session: DbSession,
+                      name: Optional[str] = None) -> VersionResponse:
+    """Remove one attachment, or all of them."""
+    from docintel.pdf import attachments as attach_tools
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, None))
+    output, removed = _guard(lambda: attach_tools.remove(data, name))
+
+    result = docsvc.add_version(
+        session, document, output, "attachments-removed",
+        actor=user, action="pdf.attachments_removed", detail=f"{removed} file(s)",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note=f"{removed} attachment(s) removed.")
+
+
+@router.post("/attachments", response_model=VersionResponse,
+             status_code=status.HTTP_201_CREATED)
+async def add_attachment(document_id: str, request: Request,
+                         user: CurrentUser, session: DbSession,
+                         file: UploadFile = File(...),
+                         description: str = Form("")) -> VersionResponse:
+    """Embed a file inside the document."""
+    from docintel.pdf import attachments as attach_tools
+
+    document = require_document(session, user, document_id, write=True)
+
+    payload = await file.read(settings.max_upload_bytes + 1)
+    await file.close()
+    if len(payload) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds the {settings.max_upload_mb} MB limit.",
+        )
+
+    data = _guard(lambda: docsvc.read_version(session, document, None))
+    output = _guard(lambda: attach_tools.attach(
+        data, file.filename or "attachment", payload, description))
+
+    result = docsvc.add_version(
+        session, document, output, "attachment",
+        actor=user, action="pdf.attachment_added",
+        detail=attach_tools.safe_name(file.filename or "attachment"),
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note="File attached to the document.")
+
+
+# --------------------------------------------------------- bates numbering
+
+class BatesRequest(BaseModel):
+    prefix: str = Field(default="", max_length=40)
+    suffix: str = Field(default="", max_length=40)
+    start_at: int = Field(default=1, ge=0)
+    digits: int = Field(default=6, ge=1, le=12)
+    position: Literal["bottom-left", "bottom-center", "bottom-right",
+                      "top-left", "top-center", "top-right"] = "bottom-right"
+    font_size: float = Field(default=9, ge=5, le=48)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+@router.post("/bates", response_model=VersionResponse)
+def bates_number(document_id: str, body: BatesRequest, request: Request,
+                 user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Stamp sequential Bates numbers.
+
+    A Bates number is a zero-padded sequence with an optional prefix, used so
+    every page of a disclosure has a unique reference that can be cited. It is
+    page numbering with a strict format, so it runs through the same stamping
+    path rather than duplicating it.
+    """
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    template = f"{body.prefix}{{page:0{body.digits}d}}{body.suffix}"
+    output = _guard(lambda: engine.page_numbers(
+        data, position=body.position, start_at=body.start_at,
+        format=template, font_size=body.font_size,
+    ))
+
+    first = template.format(page=body.start_at)
+    result = docsvc.add_version(
+        session, document, output, "bates",
+        actor=user, action="pdf.bates", detail=f"from {first}",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result,
+                    note=f"Bates numbering applied, starting at {first}.")
+
+
+# ------------------------------------------------------- scan enhancement
+
+class EnhanceRequest(BaseModel):
+    pages: Optional[List[int]] = None
+    deskew: bool = True
+    despeckle: bool = True
+    contrast: bool = True
+    binarise: bool = False
+    dpi: int = Field(default=200, ge=72, le=400)
+    # Enhancement rasterises: any real text layer is replaced by a picture of
+    # itself. Refused on a document that has one unless explicitly confirmed.
+    confirm_rasterise: bool = False
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+@router.post("/enhance", response_model=VersionResponse)
+def enhance_scan(document_id: str, body: EnhanceRequest, request: Request,
+                 user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Deskew, despeckle and clean up a scanned document."""
+    from docintel.pdf import enhance as enhance_tools
+    from docintel.pdf import ocr as ocr_tools
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    assessment = ocr_tools.assess(data)
+    if assessment.classification == "native" and not body.confirm_rasterise:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This document already has a real text layer. Enhancing it "
+                "turns every page into an image, so the text stops being "
+                "selectable, searchable and readable by the AI features. "
+                "Set confirm_rasterise to proceed anyway."
+            ),
+        )
+
+    output, report = _guard(lambda: enhance_tools.enhance(
+        data, pages=body.pages, deskew=body.deskew, despeckle=body.despeckle,
+        contrast=body.contrast, binarise=body.binarise, dpi=body.dpi,
+    ))
+
+    result = docsvc.add_version(
+        session, document, output, "enhanced",
+        actor=user, action="pdf.enhanced", detail=f"{len(report)} page(s)",
+    )
+    session.commit()
+    session.refresh(document)
+
+    skewed = [r for r in report if r["skew_corrected"]]
+    note = f"{len(report)} page(s) cleaned."
+    if skewed:
+        worst = max(abs(r["skew_corrected"]) for r in skewed)
+        note += f" Straightened up to {worst:.2f}°."
+    note += (" Pages are now images: run OCR to give the document a text layer "
+             "again.")
+    return _respond(document, result, note=note)

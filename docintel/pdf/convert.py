@@ -533,6 +533,55 @@ def office_to_pdf(raw: bytes, extension: str) -> bytes:
         )
 
 
+def to_pptx(data: bytes, scale: float = 2.0, **_) -> Tuple[bytes, int, List[str]]:
+    """One slide per page, each carrying the page as a picture.
+
+    Rendered rather than reconstructed. A PDF records glyph positions, not
+    the shapes, text boxes and layout a slide is made of, so anything claiming
+    to rebuild an editable deck is guessing. A faithful picture per slide is
+    honest and is what the fidelity note says.
+
+    The speaker notes carry the page's text, so the deck is still searchable
+    and the words are not lost to an image.
+    """
+    from pptx import Presentation
+    from pptx.util import Emu
+
+    pages = extract(data)
+    if not pages:
+        raise PDFEngineError("This document has no pages.")
+
+    deck = Presentation()
+    blank = deck.slide_layouts[6]          # completely empty layout
+    warnings: List[str] = []
+
+    for index, page in enumerate(pages, start=1):
+        # Match the slide to the page so nothing is cropped or letterboxed.
+        deck.slide_width = Emu(int(page.width * 12700))
+        deck.slide_height = Emu(int(page.height * 12700))
+
+        image = render_page(data, index, scale=scale, fmt="png").data
+        slide = deck.slides.add_slide(blank)
+        slide.shapes.add_picture(
+            io.BytesIO(image), 0, 0,
+            width=deck.slide_width, height=deck.slide_height,
+        )
+
+        text = (page.text or "").strip()
+        if text:
+            slide.notes_slide.notes_text_frame.text = text
+
+    if len({(p.width, p.height) for p in pages}) > 1:
+        warnings.append(
+            "The document mixes page sizes; each slide matches its own page, "
+            "so the deck is not a single consistent shape."
+        )
+
+    buffer = io.BytesIO()
+    deck.save(buffer)
+    return buffer.getvalue(), len(pages), warnings
+
+
 # --------------------------------------------------------------- registry
 
 Converter = Callable[..., Tuple[bytes, int, List[str]]]
@@ -548,11 +597,15 @@ _FROM_PDF: Dict[str, Tuple[Converter, Capability]] = {
     "png": (lambda d, **k: to_images(d, "png", **k), Capability("png", "PNG images (zip)", "application/zip", "zip", "raster")),
     "jpg": (lambda d, **k: to_images(d, "jpg", **k), Capability("jpg", "JPEG images (zip)", "application/zip", "zip", "raster")),
     "webp": (lambda d, **k: to_images(d, "webp", **k), Capability("webp", "WebP images (zip)", "application/zip", "zip", "raster")),
+    "pptx": (to_pptx, Capability(
+        "pptx", "PowerPoint (one slide per page)",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "pptx", "raster")),
 }
 
-# Formats that need an office engine, listed so the UI can show them as
-# unavailable with a reason rather than hiding them.
-_OFFICE_TARGETS = ("pptx",)
+# Every from-PDF target is now produced in-process. LibreOffice is still
+# required in the other direction, for turning Word and Excel files into PDFs.
+_OFFICE_TARGETS: tuple = ()
 
 
 def capabilities() -> List[Capability]:

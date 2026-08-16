@@ -706,6 +706,61 @@ export const api = {
       body: json(options),
     }),
 
+  // --- links, attachments, Bates, scan cleanup
+  links: (id: string) =>
+    request<{ count: number; links: {
+      page: number; index: number; kind: string; target: string | null;
+      rect: Rect;
+    }[] }>(`/api/v1/documents/${id}/links`),
+
+  addLink: (id: string, page: number, rect: Rect, url: string) =>
+    request<VersionResult>(`/api/v1/documents/${id}/links`, {
+      method: "POST", body: json({ page, rect, url }),
+    }),
+
+  removeLinks: (id: string, page?: number, index?: number) =>
+    request<VersionResult>(`/api/v1/documents/${id}/links/remove`, {
+      method: "POST", body: json({ page, index }),
+    }),
+
+  attachments: (id: string) =>
+    request<{ count: number; attachments: {
+      name: string; size_bytes: number; risky: boolean;
+    }[] }>(`/api/v1/documents/${id}/attachments`),
+
+  attachFile: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<VersionResult>(`/api/v1/documents/${id}/attachments`, {
+      method: "POST", body: form,
+    });
+  },
+
+  attachmentUrl: (id: string, name: string) =>
+    `/api/v1/documents/${id}/attachments/${encodeURIComponent(name)}`,
+
+  removeAttachment: (id: string, name?: string) =>
+    request<VersionResult>(
+      `/api/v1/documents/${id}/attachments/remove` +
+      (name ? `?name=${encodeURIComponent(name)}` : ""),
+      { method: "POST" }),
+
+  bates: (id: string, options: {
+    prefix?: string; suffix?: string; start_at?: number;
+    digits?: number; position?: string;
+  }) =>
+    request<VersionResult>(`/api/v1/documents/${id}/bates`, {
+      method: "POST", body: json(options),
+    }),
+
+  enhanceScan: (id: string, options: {
+    deskew?: boolean; despeckle?: boolean; contrast?: boolean;
+    binarise?: boolean; confirm_rasterise?: boolean;
+  }) =>
+    request<VersionResult>(`/api/v1/documents/${id}/enhance`, {
+      method: "POST", body: json(options),
+    }),
+
   // --- assembling from other documents
   insertPages: (id: string, sourceDocumentId: string, after: number,
                 pages?: number[]) =>
