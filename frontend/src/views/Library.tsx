@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type DocumentSummary, type Workspace } from "../api";
+import { Thumbnail } from "../components/Thumbnail";
 
 interface Props {
   workspace: Workspace;
@@ -202,6 +203,27 @@ export function Library({ workspace, onOpen, notify }: Props) {
           {documents.map((doc) => (
             <div key={doc.id}
               className={`doc-card ${selected.has(doc.id) ? "picked" : ""}`}>
+              {/* The first page is the fastest way to recognise a document.
+                  A list of filenames makes you read; a wall of covers lets
+                  you look. Only rendered once the card is on screen. */}
+              <button className="doc-cover" onClick={() => onOpen(doc.id)}
+                      aria-label={`Open ${doc.filename}`} tabIndex={-1}>
+                {doc.status === "ready" ? (
+                  <Thumbnail
+                    documentId={doc.id}
+                    page={1}
+                    active={false}
+                    selected={false}
+                    version={1}
+                    onClick={() => onOpen(doc.id)}
+                  />
+                ) : (
+                  <div className="doc-cover-empty small muted">
+                    {doc.status === "failed" ? "Could not be read" : "Preparing…"}
+                  </div>
+                )}
+              </button>
+
               <div className="doc-card-top">
                 <input
                   type="checkbox"

@@ -32,6 +32,7 @@ import {
 import { DocumentPanel } from "../components/DocumentPanel";
 import { ExtrasPanel } from "../components/ToolsExtraPanel";
 import { TextEditPanel } from "../components/TextEditPanel";
+import { CommandPalette } from "../components/CommandPalette";
 import { clearDraft, readDraft, useAutosaveDraft } from "../useDraft";
 import { DraftIndicator } from "../components/Panels";
 import { FormBuilderPanel, VersionsPanel, draftFromRect,
@@ -51,6 +52,76 @@ type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
   | "sign" | "translate" | "ocr" | "versions"
   | "organise" | "edit" | "combine" | "text" | "pagesfrom" | "document"
   | "extras";
+
+
+/**
+ * Tools, grouped by the job they do.
+ *
+ * Flat, the twenty-two tools were a wall to read every time. Grouped, the
+ * question becomes "what am I trying to do" — which is how people arrive at a
+ * PDF tool — and only one group's worth is ever on screen.
+ */
+interface ToolSpec { id: Tab; label: string; hint: string }
+interface ToolGroup { id: string; label: string; glyph: string; tools: ToolSpec[] }
+
+const TOOL_GROUPS: ToolGroup[] = [
+  {
+    id: "review", label: "Review", glyph: "◎",
+    tools: [
+      { id: "comments", label: "Comments", hint: "Notes and mark-up on this document" },
+      { id: "search", label: "Search", hint: "Find text and jump to it" },
+      { id: "compare", label: "Compare", hint: "Differences against another document" },
+      { id: "versions", label: "Versions", hint: "Every saved version, and restore" },
+    ],
+  },
+  {
+    id: "ai", label: "Understand", glyph: "✦",
+    tools: [
+      { id: "summarise", label: "Summarise", hint: "A summary of the whole document" },
+      { id: "analyse", label: "Analyse", hint: "Structure, themes and observations" },
+      { id: "ai", label: "Ask AI", hint: "Questions answered with page citations" },
+      { id: "translate", label: "Translate", hint: "Translate pages or the whole file" },
+    ],
+  },
+  {
+    id: "edit", label: "Edit", glyph: "✎",
+    tools: [
+      { id: "text", label: "Text", hint: "Change, delete or add words on the page" },
+      { id: "organise", label: "Pages", hint: "Rotate, delete, split, crop, extract" },
+      { id: "edit", label: "Stamp", hint: "Watermark, page numbers, headers, compress" },
+      { id: "pagesfrom", label: "Insert", hint: "Take pages from another document" },
+      { id: "combine", label: "Combine", hint: "Merge several documents into one" },
+    ],
+  },
+  {
+    id: "forms", label: "Forms", glyph: "▤",
+    tools: [
+      { id: "form", label: "Fill", hint: "Fill in an existing form" },
+      { id: "builder", label: "Build", hint: "Add fillable fields to a document" },
+      { id: "sign", label: "Sign", hint: "Sign it, or request signatures" },
+    ],
+  },
+  {
+    id: "secure", label: "Secure", glyph: "⚿",
+    tools: [
+      { id: "security", label: "Scan", hint: "Static check for risky constructs" },
+      { id: "redact", label: "Redact", hint: "Remove sensitive text for good" },
+      { id: "document", label: "Properties", hint: "Metadata, hidden data, bookmarks" },
+      { id: "extras", label: "Links & files", hint: "Links, attachments, Bates numbers" },
+    ],
+  },
+  {
+    id: "convert", label: "Convert", glyph: "⇄",
+    tools: [
+      { id: "convert", label: "Export", hint: "Word, Excel, PowerPoint, images, text" },
+      { id: "ocr", label: "OCR", hint: "Read text off a scanned page" },
+    ],
+  },
+];
+
+/** Every tool, flattened — used by the command palette. */
+const ALL_TOOLS: (ToolSpec & { group: string })[] = TOOL_GROUPS.flatMap(
+  (group) => group.tools.map((tool) => ({ ...tool, group: group.label })));
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
@@ -99,12 +170,16 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
   // these are inert; the media query is what turns them into overlays.
   const [railOpen, setRailOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const draft = useAutosaveDraft(
     "formbuilder", documentId, drafts, (d) => d.length === 0,
   );
 
   const canvasAreaRef = useRef<HTMLDivElement>(null);
+
+  const activeGroup = TOOL_GROUPS.find(
+    (group) => group.tools.some((tool) => tool.id === tab)) ?? TOOL_GROUPS[0];
 
   // ---------------------------------------------------------- loading
 
@@ -329,8 +404,6 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
     }
   }
 
-  const targetPages = selectedPages.size ? [...selectedPages].sort((a, b) => a - b) : [current];
-
   async function snapshot(page: number, rect: { x: number; y: number; width: number; height: number }) {
     try {
       const blob = await api.snapshot(documentId, page, rect, 3);
@@ -357,13 +430,17 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
       );
       if (typing) return;
 
-      if (meta && event.key === "f") {
+      if (meta && event.key === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
+      } else if (meta && event.key === "f") {
         event.preventDefault();
         setTab("search");
       } else if (meta && event.key === "p") {
         event.preventDefault();
         window.print();
       } else if (!meta && event.key === "Escape") {
+        setPaletteOpen(false);
         setTool("select");
         setSelection(null);
       } else if (!meta && (event.key === "PageDown" || event.key === "ArrowRight")) {
@@ -498,47 +575,18 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
 
         <span className="divider" />
 
-        <button className="tool" onClick={() =>
-          runOperation("Rotated", () => api.rotate(documentId, targetPages, 90))}>
-          Rotate ⟳
+        {/* Page and stamping operations used to sit here as well as in the
+            Edit group, where they have all their options. Two routes to the
+            same thing, one of them cut down, is not a shortcut — it is a
+            second place to keep correct. The strip now carries only what is
+            about looking at the document. */}
+        <button className="tool" onClick={() => { setTab("organise"); setPanelOpen(true); }}
+          title="Rotate, delete, duplicate, extract, split, crop">
+          Pages…
         </button>
-        <button className="tool" onClick={() =>
-          runOperation("Rotated", () => api.rotate(documentId, targetPages, -90))}>
-          Rotate ⟲
-        </button>
-        <button className="tool" onClick={() => {
-          if (window.confirm(`Delete page(s) ${targetPages.join(", ")}?`)) {
-            runOperation("Pages deleted", () => api.deletePages(documentId, targetPages));
-          }
-        }}>Delete pages</button>
-        <button className="tool" onClick={() =>
-          runOperation("Pages duplicated", () => api.duplicatePages(documentId, targetPages))}>
-          Duplicate
-        </button>
-        <button className="tool" onClick={async () => {
-          try {
-            const blob = await api.extractPages(documentId, targetPages);
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = `extract.pdf`;
-            link.click();
-            URL.revokeObjectURL(url);
-          } catch (e) { notify((e as Error).message, "error"); }
-        }}>Extract</button>
-
-        <span className="divider" />
-
-        <button className="tool" onClick={() => {
-          const text = window.prompt("Watermark text", "CONFIDENTIAL");
-          if (text?.trim()) {
-            runOperation("Watermark added", () => api.watermark(documentId, text.trim()));
-          }
-        }}>Watermark</button>
-        <button className="tool" onClick={() =>
-          runOperation("Page numbers added",
-            () => api.pageNumbers(documentId, "bottom-center"))}>
-          Page numbers
+        <button className="tool" onClick={() => { setTab("edit"); setPanelOpen(true); }}
+          title="Watermark, page numbers, headers, compress, protect">
+          Stamp…
         </button>
 
         <span className="divider" />
@@ -699,22 +747,33 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
         </main>
 
         <aside className={`panel ${panelOpen ? "open" : ""}`}>
-          <div className="panel-tabs">
-            {/* Organise, Edit and Combine lead: they are what people look for
-                first in a PDF tool, and they were the ones missing. */}
-            {(["text", "organise", "pagesfrom", "edit", "combine", "document", "extras",
-              "summarise", "analyse", "ai", "comments", "search", "security",
-              "form", "builder", "redact", "convert", "compare", "sign",
-              "translate", "ocr", "versions"] as Tab[])
-              .map((name) => (
-              <button key={name} className={tab === name ? "active" : ""}
-                onClick={() => setTab(name)}>
-                {name === "ai" ? "Ask AI" : name === "ocr" ? "OCR"
-                  : name === "pagesfrom" ? "Insert pages"
-                  : name === "document" ? "Document"
-                  : name === "extras" ? "Links & files"
-                  : name === "builder" ? "Form builder"
-                  : name[0].toUpperCase() + name.slice(1)}
+          {/* Two levels rather than one. Twenty-two tools in a flat wrapping
+              grid is a list to search through; grouped, it is a place to
+              navigate, and only the handful you are using is ever on screen. */}
+          <nav className="panel-groups" aria-label="Tool groups">
+            {TOOL_GROUPS.map((group) => {
+              const active = group.tools.some((t) => t.id === tab);
+              return (
+                <button key={group.id}
+                  className={`panel-group ${active ? "active" : ""}`}
+                  aria-current={active}
+                  onClick={() => setTab(group.tools[0].id)}>
+                  <span aria-hidden className="glyph">{group.glyph}</span>
+                  {group.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="panel-tools" role="tablist"
+               aria-label={activeGroup.label}>
+            {activeGroup.tools.map((tool) => (
+              <button key={tool.id} role="tab"
+                aria-selected={tab === tool.id}
+                className={tab === tool.id ? "active" : ""}
+                title={tool.hint}
+                onClick={() => setTab(tool.id)}>
+                {tool.label}
               </button>
             ))}
           </div>
@@ -935,6 +994,16 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
         {saving === "idle" && <DraftIndicator status={draft.status} />}
         {tool === "snapshot" && <span>Drag a region to capture</span>}
       </div>
+
+      {paletteOpen && (
+        <CommandPalette
+          commands={ALL_TOOLS.map((tool) => ({
+            id: tool.id, label: tool.label, group: tool.group, hint: tool.hint,
+          }))}
+          onRun={(id) => { setTab(id as Tab); setPanelOpen(true); }}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
 
       {selection && tool === "select" && (
         <SelectionToolbar
