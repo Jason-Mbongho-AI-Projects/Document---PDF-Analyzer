@@ -36,8 +36,13 @@ cd frontend && npm run dev
 ```
 
 SQLite and local disk are the defaults, so a clone runs with no database or
-object store to set up. Point `DOCINTEL_DATABASE_URL` at Postgres and
-`DOCINTEL_STORAGE_DRIVER` at S3 for a real deployment.
+object store to set up.
+
+`DOCINTEL_DATABASE_URL` accepts any SQLAlchemy URL, including Postgres, but
+**no Postgres driver ships in `requirements.txt`** — install `psycopg[binary]`
+yourself before pointing it there. Storage and queue currently have one working
+driver each: `local` and `database`. Selecting `s3` or `rq` raises a clear error
+at startup rather than degrading quietly. See [Not built](#not-built).
 
 ---
 
@@ -175,8 +180,26 @@ it would have provided is covered above.
 
 ## Not built
 
-Autosave indicator, mobile/touch polish beyond responsive CSS, and
-cryptographic (PAdES) signatures.
+Stated plainly so nothing here reads as finished when it is not.
+
+**Autosave.** Every operation appends a version, and versions are listed and
+restorable, but there is no autosave-on-edit and no saved-state indicator.
+
+**Touch input.** The layout is responsive, but two interactions are mouse-only
+and will not work on a touch device: page reorder uses HTML5 drag events, and
+region snapshot uses mousedown/mouseup. Signature drawing is the one surface
+with touch handlers. Treat the viewer as desktop-only for now.
+
+**S3 storage and the `rq` queue.** The provider abstractions exist and the
+config accepts both values, but only `local` and `database` are implemented.
+The others raise at startup with a message naming what is available.
+
+**Postgres driver.** The code is engine-agnostic and the URL is honoured, but
+`psycopg` is not in `requirements.txt`; install it before switching.
+
+**Cryptographic (PAdES) signatures.** Signing applies a visible signature and
+a tamper-evident audit trail. It is not a cryptographic digital signature and
+does not claim to be.
 
 `app.py` is the original single-user Streamlit prototype, kept for reference.
 It is not part of the platform.
