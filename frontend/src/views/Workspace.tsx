@@ -24,8 +24,9 @@ import { SignPanel } from "../components/SignPanel";
 import { OcrPanel, TranslatePanel } from "../components/ToolsPanel";
 import { AnalysePanel, SummarisePanel } from "../components/SummarisePanel";
 import {
-  CombinePanel, EditPanel, OrganisePanel,
+  CombinePanel, EditPanel, OrganisePanel, PagesFromPanel,
 } from "../components/OrganisePanel";
+import { DocumentPanel } from "../components/DocumentPanel";
 import { TextEditPanel } from "../components/TextEditPanel";
 import { clearDraft, readDraft, useAutosaveDraft } from "../useDraft";
 import { DraftIndicator } from "../components/Panels";
@@ -38,7 +39,7 @@ type Tool = "select" | "snapshot";
 type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
   | "security" | "form" | "builder" | "redact" | "convert" | "compare"
   | "sign" | "translate" | "ocr" | "versions"
-  | "organise" | "edit" | "combine" | "text";
+  | "organise" | "edit" | "combine" | "text" | "pagesfrom" | "document";
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
@@ -592,7 +593,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
           <div className="panel-tabs">
             {/* Organise, Edit and Combine lead: they are what people look for
                 first in a PDF tool, and they were the ones missing. */}
-            {(["text", "organise", "edit", "combine",
+            {(["text", "organise", "pagesfrom", "edit", "combine", "document",
               "summarise", "analyse", "ai", "comments", "search", "security",
               "form", "builder", "redact", "convert", "compare", "sign",
               "translate", "ocr", "versions"] as Tab[])
@@ -600,6 +601,8 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
               <button key={name} className={tab === name ? "active" : ""}
                 onClick={() => setTab(name)}>
                 {name === "ai" ? "Ask AI" : name === "ocr" ? "OCR"
+                  : name === "pagesfrom" ? "Insert pages"
+                  : name === "document" ? "Document"
                   : name === "builder" ? "Form builder"
                   : name[0].toUpperCase() + name.slice(1)}
               </button>
@@ -615,6 +618,26 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
                 // Whatever is selected in the page is almost always what the
                 // user means to change, so it prefills the field.
                 selectedText={selection?.text}
+                onSaved={(message) => reload(message)}
+                notify={notify}
+              />
+            )}
+
+            {tab === "pagesfrom" && detail && (
+              <PagesFromPanel
+                documentId={documentId}
+                workspaceId={detail.workspace_id}
+                pageCount={pages.length}
+                onSaved={(message) => reload(message)}
+                notify={notify}
+              />
+            )}
+
+            {tab === "document" && (
+              <DocumentPanel
+                documentId={documentId}
+                pageCount={pages.length}
+                annotationCount={annotations.length}
                 onSaved={(message) => reload(message)}
                 notify={notify}
               />

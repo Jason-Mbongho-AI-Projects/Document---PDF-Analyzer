@@ -710,3 +710,296 @@ def add_text(document_id: str, body: AddTextRequest, request: Request,
         document, result,
         note=f"Text added to page {body.page} and verified as readable.",
     )
+
+
+# --------------------------------------------------- assembling from sources
+
+class InsertPagesRequest(BaseModel):
+    source_document_id: str = Field(min_length=8, max_length=64)
+    after: int = Field(default=0, ge=0)
+    pages: Optional[List[int]] = None
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class ReplacePagesRequest(BaseModel):
+    source_document_id: str = Field(min_length=8, max_length=64)
+    targets: List[int] = Field(min_length=1)
+    pages: Optional[List[int]] = None
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class BlankPagesRequest(BaseModel):
+    after: int = Field(default=0, ge=0)
+    count: int = Field(default=1, ge=1, le=100)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+def _source_bytes(session, user, document, source_id: str) -> bytes:
+    """Read another document, authorised in its own right.
+
+    Naming a document must never become a way to read one you cannot open, so
+    the source goes through the same check as a direct request and an
+    unauthorised id is indistinguishable from a missing one.
+    """
+    source = require_document(session, user, source_id)
+    if source.workspace_id != document.workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Both documents must be in the same workspace.",
+        )
+    return _guard(lambda: docsvc.read_version(session, source, None))
+
+
+@router.post("/pages/insert", response_model=VersionResponse)
+def insert_pages(document_id: str, body: InsertPagesRequest, request: Request,
+                 user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Insert pages from another document. after=0 places them first."""
+    from docintel.pdf import assemble
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+    source = _source_bytes(session, user, document, body.source_document_id)
+
+    output = _guard(lambda: assemble.insert_pages(
+        data, source, after=body.after, pages=body.pages))
+
+    result = docsvc.add_version(
+        session, document, output, "pages-inserted",
+        actor=user, action="pdf.pages_inserted",
+        detail=f"after page {body.after}",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result,
+                    note=f"Pages inserted after page {body.after}.")
+
+
+@router.post("/pages/replace", response_model=VersionResponse)
+def replace_pages(document_id: str, body: ReplacePagesRequest, request: Request,
+                  user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Swap pages for pages taken from another document."""
+    from docintel.pdf import assemble
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+    source = _source_bytes(session, user, document, body.source_document_id)
+
+    output = _guard(lambda: assemble.replace_pages(
+        data, source, targets=body.targets, pages=body.pages))
+
+    result = docsvc.add_version(
+        session, document, output, "pages-replaced",
+        actor=user, action="pdf.pages_replaced",
+        detail=f"{len(body.targets)} page(s)",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result,
+                    note=f"{len(body.targets)} page(s) replaced.")
+
+
+@router.post("/pages/blank", response_model=VersionResponse)
+def add_blank_pages(document_id: str, body: BlankPagesRequest, request: Request,
+                    user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Add blank pages, matching the neighbouring page size."""
+    from docintel.pdf import assemble
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    output = _guard(lambda: assemble.insert_blank(
+        data, after=body.after, count=body.count))
+
+    result = docsvc.add_version(
+        session, document, output, "blank-pages",
+        actor=user, action="pdf.blank_pages",
+        detail=f"{body.count} page(s) after {body.after}",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result,
+                    note=f"{body.count} blank page(s) added.")
+
+
+# --------------------------------------------------------- flatten comments
+
+@router.post("/annotations/flatten", response_model=VersionResponse)
+def flatten_annotations(document_id: str, request: Request,
+                        user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Write the stored annotations into the document itself.
+
+    Annotations live in the database so that marking up a document never
+    rewrites it. The cost is that a downloaded copy has none of them, which
+    surprises people. This produces a copy that does, as a new version, and
+    leaves the editable annotations untouched.
+    """
+    from docintel.db.models import Annotation
+    from docintel.pdf import annots
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, None))
+
+    rows = session.query(Annotation).filter(
+        Annotation.document_id == document.id).all()
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This document has no annotations to write into it.",
+        )
+
+    payload = [
+        {"kind": r.kind.value if hasattr(r.kind, "value") else str(r.kind),
+         "page": r.page, "rect": r.rect or {}, "quads": r.quads or [],
+         "colour": r.colour, "opacity": r.opacity, "body": r.body}
+        for r in rows
+    ]
+
+    output = _guard(lambda: annots.flatten(data, payload))
+    result = docsvc.add_version(
+        session, document, output, "annotated",
+        actor=user, action="pdf.annotations_flattened",
+        detail=f"{len(payload)} annotation(s)",
+    )
+    session.commit()
+    session.refresh(document)
+
+    return _respond(
+        document, result,
+        note=(f"{len(payload)} annotation(s) written into the page. They are "
+              "part of the document now and can no longer be edited there; "
+              "the editable copies remain in the Comments tab."),
+    )
+
+
+# ------------------------------------------------------ document properties
+
+class MetadataRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=300)
+    author: Optional[str] = Field(default=None, max_length=300)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    keywords: Optional[str] = Field(default=None, max_length=500)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class SanitiseRequest(BaseModel):
+    remove_metadata: bool = True
+    remove_javascript: bool = True
+    remove_embedded_files: bool = True
+    remove_outline: bool = False
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class OutlineEntry(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    page: int = Field(ge=1)
+    depth: int = Field(default=0, ge=0, le=8)
+
+
+class OutlineRequest(BaseModel):
+    entries: List[OutlineEntry] = Field(max_length=2000)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+@router.get("/properties")
+def get_properties(document_id: str, user: CurrentUser, session: DbSession,
+                   version: Optional[int] = None) -> dict:
+    """Metadata, page geometry, and what hidden data the file carries."""
+    from docintel.pdf import properties
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    result = _guard(lambda: properties.read_properties(data))
+    result["document_id"] = document.id
+    return result
+
+
+@router.post("/properties", response_model=VersionResponse)
+def set_properties(document_id: str, body: MetadataRequest, request: Request,
+                   user: CurrentUser, session: DbSession) -> VersionResponse:
+    from docintel.pdf import properties
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    values = {k: v for k, v in body.model_dump(exclude={"source_version"}).items()
+              if v is not None}
+    if not values:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No properties were supplied.")
+
+    output = _guard(lambda: properties.set_metadata(data, values))
+    result = docsvc.add_version(
+        session, document, output, "properties",
+        actor=user, action="pdf.properties_set",
+        detail=", ".join(sorted(values)),
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note="Document properties updated.")
+
+
+@router.post("/sanitise", response_model=VersionResponse)
+def sanitise_document(document_id: str, body: SanitiseRequest, request: Request,
+                      user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Strip hidden data, reporting exactly what was removed."""
+    from docintel.pdf import properties
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    output, removed = _guard(lambda: properties.sanitise(
+        data,
+        remove_metadata=body.remove_metadata,
+        remove_javascript=body.remove_javascript,
+        remove_embedded_files=body.remove_embedded_files,
+        remove_outline=body.remove_outline,
+    ))
+
+    result = docsvc.add_version(
+        session, document, output, "sanitised",
+        actor=user, action="pdf.sanitised",
+        detail=f"{len(removed)} item(s)",
+    )
+    session.commit()
+    session.refresh(document)
+
+    if removed:
+        note = ("Removed: " + "; ".join(removed) + ". Earlier versions still "
+                "contain it — delete them if the original must not survive.")
+    else:
+        note = ("Nothing was removed: this document carried none of the hidden "
+                "data that was checked for.")
+    return _respond(document, result, note=note)
+
+
+@router.get("/outline")
+def get_outline(document_id: str, user: CurrentUser, session: DbSession,
+                version: Optional[int] = None) -> dict:
+    from docintel.pdf import properties
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    return {"document_id": document.id,
+            "entries": _guard(lambda: properties.read_outline(data))}
+
+
+@router.post("/outline", response_model=VersionResponse)
+def set_document_outline(document_id: str, body: OutlineRequest, request: Request,
+                         user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Replace the bookmarks with the given list."""
+    from docintel.pdf import properties
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    entries = [e.model_dump() for e in body.entries]
+    output = _guard(lambda: properties.set_outline(data, entries))
+
+    result = docsvc.add_version(
+        session, document, output, "bookmarks",
+        actor=user, action="pdf.outline_set",
+        detail=f"{len(entries)} bookmark(s)",
+    )
+    session.commit()
+    session.refresh(document)
+    return _respond(document, result, note=f"{len(entries)} bookmark(s) saved.")

@@ -701,6 +701,65 @@ export const api = {
       body: json(options),
     }),
 
+  // --- assembling from other documents
+  insertPages: (id: string, sourceDocumentId: string, after: number,
+                pages?: number[]) =>
+    request<VersionResult>(`/api/v1/documents/${id}/pages/insert`, {
+      method: "POST",
+      body: json({ source_document_id: sourceDocumentId, after, pages }),
+    }),
+
+  replacePagesFrom: (id: string, sourceDocumentId: string,
+                     targets: number[], pages?: number[]) =>
+    request<VersionResult>(`/api/v1/documents/${id}/pages/replace`, {
+      method: "POST",
+      body: json({ source_document_id: sourceDocumentId, targets, pages }),
+    }),
+
+  addBlankPages: (id: string, after: number, count: number) =>
+    request<VersionResult>(`/api/v1/documents/${id}/pages/blank`, {
+      method: "POST",
+      body: json({ after, count }),
+    }),
+
+  // --- document structure
+  /** Writes the stored annotations into the file as a new version. */
+  flattenAnnotations: (id: string) =>
+    request<VersionResult>(`/api/v1/documents/${id}/annotations/flatten`,
+      { method: "POST" }),
+
+  properties: (id: string) =>
+    request<{
+      page_count: number;
+      encrypted: boolean;
+      metadata: Record<string, string>;
+      pages: { page: number; width: number; height: number; rotation: number }[];
+      hidden_data: Record<string, number | boolean>;
+    }>(`/api/v1/documents/${id}/properties`),
+
+  setProperties: (id: string, values: Record<string, string>) =>
+    request<VersionResult>(`/api/v1/documents/${id}/properties`, {
+      method: "POST",
+      body: json(values),
+    }),
+
+  sanitise: (id: string, options: Record<string, boolean> = {}) =>
+    request<VersionResult>(`/api/v1/documents/${id}/sanitise`, {
+      method: "POST",
+      body: json(options),
+    }),
+
+  outline: (id: string) =>
+    request<{ entries: { title: string; page: number; depth: number }[] }>(
+      `/api/v1/documents/${id}/outline`),
+
+  setOutline: (id: string,
+               entries: { title: string; page: number; depth: number }[]) =>
+    request<VersionResult>(`/api/v1/documents/${id}/outline`, {
+      method: "POST",
+      body: json({ entries }),
+    }),
+
   // --- text editing
   findText: (id: string, q: string, page?: number) =>
     request<{

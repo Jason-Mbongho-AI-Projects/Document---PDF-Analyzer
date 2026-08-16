@@ -160,6 +160,150 @@ export function OrganisePanel({
       <div className="meta" style={{ marginTop: 14 }}>Crop</div>
       <CropControls documentId={documentId} pages={target}
                     busy={busy} run={run} />
+
+      <div className="meta" style={{ marginTop: 14 }}>Insert blank pages</div>
+      <BlankControls documentId={documentId} pageCount={pageCount}
+                     busy={busy} run={run} />
+    </>
+  );
+}
+
+function BlankControls({
+  documentId, pageCount, busy, run,
+}: {
+  documentId: string;
+  pageCount: number;
+  busy: boolean;
+  run: (label: string, action: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [after, setAfter] = useState(pageCount);
+  const [count, setCount] = useState(1);
+
+  return (
+    <div className="row">
+      <label className="small" style={{ flex: 1 }}>
+        After page
+        <input className="input" type="number" min={0} max={pageCount} value={after}
+          onChange={(e) => setAfter(Math.max(0, Math.min(pageCount,
+            Number(e.target.value) || 0)))} />
+      </label>
+      <label className="small" style={{ flex: 1 }}>
+        How many
+        <input className="input" type="number" min={1} max={100} value={count}
+          onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))} />
+      </label>
+      <button className="btn sm" disabled={busy} style={{ alignSelf: "end" }}
+        onClick={() => run("Blank pages added",
+          () => api.addBlankPages(documentId, after, count))}>
+        Add
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Taking pages from a second document — Acrobat's Insert and Replace.
+ *
+ * Both need another document to pull from, so they share the picker rather
+ * than making the user choose one twice.
+ */
+export function PagesFromPanel({
+  documentId, workspaceId, pageCount, onSaved, notify,
+}: {
+  documentId: string;
+  workspaceId: string;
+  pageCount: number;
+  onSaved: (message: string) => void;
+  notify: (message: string, tone?: "ok" | "error") => void;
+}) {
+  const [available, setAvailable] = useState<DocumentSummary[]>([]);
+  const [source, setSource] = useState("");
+  const [sourcePages, setSourcePages] = useState("");
+  const [after, setAfter] = useState(pageCount);
+  const [targets, setTargets] = useState("");
+  const { busy, run } = useRunner(onSaved, notify);
+
+  useEffect(() => {
+    api.documents(workspaceId, "", false)
+      .then((r) => {
+        const others = r.items.filter((d) => d.id !== documentId);
+        setAvailable(others);
+        if (others.length) setSource(others[0].id);
+      })
+      .catch((e) => notify((e as Error).message, "error"));
+  }, [workspaceId, documentId, notify]);
+
+  const pickedPages = sourcePages.trim()
+    ? parseRanges(sourcePages, 10000)
+    : undefined;
+  const targetPages = parseRanges(targets, pageCount);
+
+  if (!available.length) {
+    return (
+      <div className="empty">
+        <h4>Nothing to take pages from</h4>
+        <p className="small">
+          Upload another document to this workspace first.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <label className="field">
+        <span>Take pages from</span>
+        <select className="input" value={source}
+          onChange={(e) => setSource(e.target.value)}>
+          {available.map((d) => (
+            <option key={d.id} value={d.id}>{d.filename}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="field">
+        <span>Which of its pages</span>
+        <input className="input" value={sourcePages}
+          placeholder="e.g. 1-3 — blank takes all of them"
+          onChange={(e) => setSourcePages(e.target.value)} />
+      </label>
+
+      <div className="meta" style={{ marginTop: 12 }}>Insert</div>
+      <div className="row">
+        <label className="small" style={{ flex: 1 }}>
+          After page (0 = at the start)
+          <input className="input" type="number" min={0} max={pageCount}
+            value={after}
+            onChange={(e) => setAfter(Math.max(0, Math.min(pageCount,
+              Number(e.target.value) || 0)))} />
+        </label>
+        <button className="btn sm primary" disabled={busy || !source}
+          style={{ alignSelf: "end" }}
+          onClick={() => run("Pages inserted",
+            () => api.insertPages(documentId, source, after, pickedPages))}>
+          Insert
+        </button>
+      </div>
+
+      <div className="meta" style={{ marginTop: 14 }}>Replace</div>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        The pages replaced and the pages supplied must be the same count, in
+        order.
+      </p>
+      <div className="row">
+        <input className="input" value={targets} placeholder="Pages to replace, e.g. 2,5"
+          onChange={(e) => setTargets(e.target.value)} />
+        <button className="btn sm danger" disabled={busy || !source || !targetPages.length}
+          onClick={() => run("Pages replaced",
+            () => api.replacePagesFrom(documentId, source, targetPages, pickedPages))}>
+          Replace {targetPages.length || ""}
+        </button>
+      </div>
+
+      <p className="small muted" style={{ marginTop: 12 }}>
+        Both save a new version. The document you take pages from is never
+        changed.
+      </p>
     </>
   );
 }
