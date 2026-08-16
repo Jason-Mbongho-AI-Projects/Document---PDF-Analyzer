@@ -578,3 +578,135 @@ def build_form(document_id: str, body: BuildFormRequest, request: Request,
         note=f"{len(specs)} fillable field(s) added and verified. "
              "The previous version remains available.",
     )
+
+
+# ------------------------------------------------------------ text editing
+
+class TextStyle(BaseModel):
+    font: Literal["Helvetica", "Times", "Courier"] = "Helvetica"
+    size: Optional[float] = Field(default=None, ge=4, le=200)
+    colour: str = Field(default="#000000", max_length=9)
+    bold: bool = False
+    italic: bool = False
+
+
+class TextEditItem(BaseModel):
+    page: int = Field(ge=1)
+    find: str = Field(min_length=1, max_length=2000)
+    replace: str = Field(default="", max_length=2000)
+    style: TextStyle = Field(default_factory=TextStyle)
+    occurrence: Optional[int] = Field(default=None, ge=0)
+
+
+class TextEditRequest(BaseModel):
+    edits: List[TextEditItem] = Field(min_length=1, max_length=100)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+class AddTextRequest(BaseModel):
+    page: int = Field(ge=1)
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    text: str = Field(min_length=1, max_length=2000)
+    style: TextStyle = Field(default_factory=TextStyle)
+    source_version: Optional[int] = Field(default=None, ge=1)
+
+
+def _style(model: TextStyle):
+    from docintel.pdf.textedit import Style
+    return Style(font=model.font, size=model.size, colour=model.colour,
+                 bold=model.bold, italic=model.italic)
+
+
+@router.get("/text/find")
+def find_text(document_id: str, q: str, user: CurrentUser, session: DbSession,
+              page: Optional[int] = None,
+              version: Optional[int] = None) -> dict:
+    """Where a phrase appears, so the client can offer to edit it."""
+    from docintel.pdf import textedit
+
+    document = require_document(session, user, document_id)
+    data = _guard(lambda: docsvc.read_version(session, document, version))
+    found = textedit.find_text(data, q, page=page)
+
+    return {
+        "document_id": document.id,
+        "query": q,
+        "count": len(found),
+        "occurrences": [o.as_dict() for o in found],
+    }
+
+
+@router.post("/text/edit", response_model=VersionResponse)
+def edit_text(document_id: str, body: TextEditRequest, request: Request,
+              user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Replace or delete text, verified by re-reading the result.
+
+    Replacement text is drawn in a standard font: an embedded font is usually
+    subsetted and cannot be extended to new glyphs. The response names the
+    font actually used and flags any replacement wider than what it replaced,
+    because PDF text does not reflow.
+    """
+    from docintel.pdf import textedit
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    edits = [
+        textedit.Edit(page=item.page, find=item.find, replace=item.replace,
+                      style=_style(item.style), occurrence=item.occurrence)
+        for item in body.edits
+    ]
+
+    output, report = _guard(lambda: textedit.apply_edits(data, edits, verify=True))
+
+    changed = sum(1 for r in report if r["replaced_with"])
+    removed = len(report) - changed
+    result = docsvc.add_version(
+        session, document, output, "text-edited",
+        actor=user, action="pdf.text_edited",
+        # Deliberately counts only: an audit log that quotes the edited text
+        # would carry the document's content into the log.
+        detail=f"{changed} replaced, {removed} deleted",
+    )
+    session.commit()
+    session.refresh(document)
+
+    fonts = sorted({r["font"] for r in report if r["font"]})
+    overflow = [r for r in report if r.get("overflows")]
+    note = f"{changed} replacement(s) and {removed} deletion(s), verified."
+    if fonts:
+        note += f" Replacement text drawn in {', '.join(fonts)}."
+    if overflow:
+        note += (f" {len(overflow)} replacement(s) are wider than the original "
+                 "text and may overlap what follows.")
+
+    return _respond(document, result, note=note)
+
+
+@router.post("/text/add", response_model=VersionResponse)
+def add_text(document_id: str, body: AddTextRequest, request: Request,
+             user: CurrentUser, session: DbSession) -> VersionResponse:
+    """Draw new text at a point on the page, in PDF coordinates."""
+    from docintel.pdf import textedit
+
+    document = require_document(session, user, document_id, write=True)
+    data = _guard(lambda: docsvc.read_version(session, document, body.source_version))
+
+    output = _guard(lambda: textedit.add_text(
+        data, body.page, body.x, body.y, body.text,
+        _style(body.style), verify=True,
+    ))
+
+    result = docsvc.add_version(
+        session, document, output, "text-added",
+        actor=user, action="pdf.text_added",
+        detail=f"page {body.page}",
+    )
+    session.commit()
+    session.refresh(document)
+
+    return _respond(
+        document, result,
+        note=f"Text added to page {body.page} and verified as readable.",
+    )

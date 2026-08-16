@@ -701,6 +701,49 @@ export const api = {
       body: json(options),
     }),
 
+  // --- text editing
+  findText: (id: string, q: string, page?: number) =>
+    request<{
+      count: number;
+      occurrences: {
+        page: number; text: string;
+        x: number; y: number; width: number; height: number;
+      }[];
+    }>(`/api/v1/documents/${id}/text/find?q=${encodeURIComponent(q)}` +
+       (page ? `&page=${page}` : "")),
+
+  editText: (
+    id: string,
+    edits: {
+      page: number;
+      find: string;
+      replace?: string;
+      occurrence?: number;
+      style?: {
+        font?: string; size?: number | null; colour?: string;
+        bold?: boolean; italic?: boolean;
+      };
+    }[],
+  ) =>
+    request<VersionResult>(`/api/v1/documents/${id}/text/edit`, {
+      method: "POST",
+      body: json({ edits }),
+    }),
+
+  addText: (
+    id: string,
+    page: number,
+    x: number,
+    y: number,
+    text: string,
+    style?: { font?: string; size?: number; colour?: string;
+              bold?: boolean; italic?: boolean },
+  ) =>
+    request<VersionResult>(`/api/v1/documents/${id}/text/add`, {
+      method: "POST",
+      body: json({ page, x, y, text, style: style ?? {} }),
+    }),
+
   /** Combine several documents into a brand-new one; sources are untouched. */
   mergeDocuments: (documentIds: string[], filename: string) =>
     request<{ document: DocumentSummary; jobs: string[] }>(
