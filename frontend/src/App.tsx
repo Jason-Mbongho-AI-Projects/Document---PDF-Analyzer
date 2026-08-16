@@ -151,6 +151,7 @@ export default function App() {
           documentId={openDocument}
           onBack={() => setOpenDocument(null)}
           notify={notify}
+          onOpenDocument={setOpenDocument}
         />
       ) : active ? (
         <div className="body">

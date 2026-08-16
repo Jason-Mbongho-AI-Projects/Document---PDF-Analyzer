@@ -23,6 +23,9 @@ import { ComparePanel, ConvertPanel } from "../components/ConvertPanel";
 import { SignPanel } from "../components/SignPanel";
 import { OcrPanel, TranslatePanel } from "../components/ToolsPanel";
 import { AnalysePanel, SummarisePanel } from "../components/SummarisePanel";
+import {
+  CombinePanel, EditPanel, OrganisePanel,
+} from "../components/OrganisePanel";
 import { clearDraft, readDraft, useAutosaveDraft } from "../useDraft";
 import { DraftIndicator } from "../components/Panels";
 import { FormBuilderPanel, VersionsPanel, draftFromRect,
@@ -33,7 +36,8 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 type Tool = "select" | "snapshot";
 type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
   | "security" | "form" | "builder" | "redact" | "convert" | "compare"
-  | "sign" | "translate" | "ocr" | "versions";
+  | "sign" | "translate" | "ocr" | "versions"
+  | "organise" | "edit" | "combine";
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
@@ -41,9 +45,11 @@ interface Props {
   documentId: string;
   onBack: () => void;
   notify: (message: string, tone?: "ok" | "error") => void;
+  /** Switch to another document — used after combining creates a new one. */
+  onOpenDocument?: (documentId: string) => void;
 }
 
-export function Workspace({ documentId, onBack, notify }: Props) {
+export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props) {
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pages, setPages] = useState<PDFPageProxy[]>([]);
@@ -583,7 +589,10 @@ export function Workspace({ documentId, onBack, notify }: Props) {
 
         <aside className={`panel ${panelOpen ? "open" : ""}`}>
           <div className="panel-tabs">
-            {(["summarise", "analyse", "ai", "comments", "search", "security",
+            {/* Organise, Edit and Combine lead: they are what people look for
+                first in a PDF tool, and they were the ones missing. */}
+            {(["organise", "edit", "combine",
+              "summarise", "analyse", "ai", "comments", "search", "security",
               "form", "builder", "redact", "convert", "compare", "sign",
               "translate", "ocr", "versions"] as Tab[])
               .map((name) => (
@@ -597,6 +606,36 @@ export function Workspace({ documentId, onBack, notify }: Props) {
           </div>
 
           <div className="panel-body">
+            {tab === "organise" && (
+              <OrganisePanel
+                documentId={documentId}
+                pageCount={pages.length}
+                selectedPages={[...selectedPages].sort((a, b) => a - b)}
+                onSaved={(message) => reload(message)}
+                notify={notify}
+              />
+            )}
+
+            {tab === "edit" && (
+              <EditPanel
+                documentId={documentId}
+                onSaved={(message) => reload(message)}
+                notify={notify}
+              />
+            )}
+
+            {tab === "combine" && detail && (
+              <CombinePanel
+                documentId={documentId}
+                workspaceId={detail.workspace_id}
+                onCombined={(newId, message) => {
+                  notify(message, "ok");
+                  onOpenDocument?.(newId);
+                }}
+                notify={notify}
+              />
+            )}
+
             {tab === "summarise" && (
               <SummarisePanel
                 documentId={documentId}

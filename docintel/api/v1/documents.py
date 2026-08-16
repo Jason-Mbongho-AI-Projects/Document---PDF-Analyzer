@@ -101,6 +101,96 @@ async def upload_document(
     )
 
 
+class MergeRequest(BaseModel):
+    # Order matters: the pages appear in exactly this sequence, so the client
+    # controls it rather than the server sorting by name or date.
+    document_ids: List[str] = Field(min_length=2, max_length=50)
+    filename: str = Field(default="combined.pdf", max_length=200)
+
+
+# Declared before /{document_id} so the literal path is matched first rather
+# than being read as a document id.
+@router.post("/merge", response_model=DocumentUploadResponse,
+             status_code=status.HTTP_201_CREATED)
+def merge_documents(
+    body: MergeRequest,
+    request: Request,
+    user: CurrentUser,
+    session: DbSession,
+) -> DocumentUploadResponse:
+    """Combine several documents, in the given order, into a new one.
+
+    The sources are left untouched — this creates a document rather than
+    editing one, so nothing can be lost by combining.
+    """
+    from docintel.pdf.engine import PDFEngineError, get_engine
+
+    # Every source is authorised individually. Membership of one workspace
+    # must not grant reading a document in another.
+    sources = [require_document(session, user, doc_id)
+               for doc_id in body.document_ids]
+
+    workspaces = {d.workspace_id for d in sources}
+    if len(workspaces) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All documents must belong to the same workspace.",
+        )
+
+    workspace_id = sources[0].workspace_id
+    require_workspace(session, user, workspace_id, write=True)
+
+    from docintel.services import documents as docsvc
+    try:
+        payloads = [docsvc.read_version(session, d, None) for d in sources]
+        merged = get_engine().merge(payloads)
+    except PDFEngineError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=str(exc)) from exc
+
+    name = body.filename.strip() or "combined.pdf"
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+
+    digest = content_hash(merged)
+    document = Document(
+        workspace_id=workspace_id,
+        uploaded_by=user.id,
+        filename=name,
+        mime_type="application/pdf",
+        size_bytes=len(merged),
+        content_hash=digest,
+        status=DocumentStatus.PROCESSING,
+        doc_metadata={"combined_from": [d.id for d in sources]},
+    )
+    session.add(document)
+    session.flush()
+
+    key = build_key(workspace_id, document.id, 1, "original")
+    storage.put(key, merged)
+    session.add(DocumentVersion(
+        document_id=document.id, version=1, label="combined",
+        storage_key=key, size_bytes=len(merged), content_hash=digest,
+    ))
+
+    jobs = [
+        queue.enqueue(session, workspace_id=workspace_id, job_type=job_type,
+                      document_id=document.id,
+                      idempotency_key=f"{job_type.value}:{document.id}").id
+        for job_type in (JobType.INGEST, JobType.SECURITY_SCAN)
+    ]
+
+    audit.record(session, action="document.combined", actor=user,
+                 workspace_id=workspace_id, document_id=document.id,
+                 detail=f"{len(sources)} document(s)", ip_address=client_ip(request))
+    session.commit()
+    session.refresh(document)
+
+    return DocumentUploadResponse(
+        document=DocumentResponse.model_validate(document), jobs=jobs
+    )
+
+
 @router.get("", response_model=Page)
 def list_documents(
     user: CurrentUser,

@@ -650,11 +650,63 @@ export const api = {
       reduction_percent: number;
     }>(`/api/v1/documents/${id}/compress`, { method: "POST", body: json({ preset }) }),
 
-  protect: (id: string, userPassword: string) =>
+  protect: (
+    id: string,
+    userPassword: string,
+    permissions?: {
+      allow_print?: boolean;
+      allow_copy?: boolean;
+      allow_modify?: boolean;
+      allow_annotate?: boolean;
+    },
+  ) =>
     request<VersionResult>(`/api/v1/documents/${id}/protect`, {
       method: "POST",
-      body: json({ user_password: userPassword }),
+      body: json({ user_password: userPassword, ...(permissions ?? {}) }),
     }),
+
+  unlock: (id: string, password: string) =>
+    request<VersionResult>(`/api/v1/documents/${id}/unlock`, {
+      method: "POST",
+      body: json({ password }),
+    }),
+
+  cropPages: (
+    id: string,
+    pages: number[],
+    box: { left: number; bottom: number; right: number; top: number },
+  ) =>
+    request<VersionResult>(`/api/v1/documents/${id}/pages/crop`, {
+      method: "POST",
+      body: json({ pages, ...box }),
+    }),
+
+  // Each range becomes its own version of this document, downloadable
+  // individually — the source stays intact.
+  splitDocument: (id: string, ranges: [number, number][]) =>
+    request<{
+      document_id: string;
+      parts: { version: number; label: string; pages: string; size_bytes: number }[];
+    }>(`/api/v1/documents/${id}/pages/split`, {
+      method: "POST",
+      body: json({ ranges }),
+    }),
+
+  headerFooter: (
+    id: string,
+    options: { header?: string; footer?: string; align?: string },
+  ) =>
+    request<VersionResult>(`/api/v1/documents/${id}/header-footer`, {
+      method: "POST",
+      body: json(options),
+    }),
+
+  /** Combine several documents into a brand-new one; sources are untouched. */
+  mergeDocuments: (documentIds: string[], filename: string) =>
+    request<{ document: DocumentSummary; jobs: string[] }>(
+      "/api/v1/documents/merge",
+      { method: "POST", body: json({ document_ids: documentIds, filename }) },
+    ),
 
   snapshot: (id: string, page: number, rect: Rect, scale = 2) =>
     requestBlob(`/api/v1/documents/${id}/snapshot`, {
