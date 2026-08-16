@@ -1,4 +1,12 @@
-/** Document library: upload, browse, open. */
+/**
+ * Document library: upload, browse, open, archive and delete.
+ *
+ * Delete is permanent — it removes the database rows and every stored byte
+ * including all versions — so it is always behind an explicit confirmation
+ * that names what is going and says it cannot be undone. Archive is offered
+ * alongside it because "get it off my dashboard" is usually what someone
+ * actually wants, and that one is reversible.
+ */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type DocumentSummary, type Workspace } from "../api";
 
@@ -14,9 +22,14 @@ function humanSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+type Pending = { ids: string[]; names: string[] } | null;
+
 export function Library({ workspace, onOpen, notify }: Props) {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState<Pending>(null);
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -24,14 +37,19 @@ export function Library({ workspace, onOpen, notify }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const result = await api.documents(workspace.id, search);
+      const result = await api.documents(workspace.id, search, showArchived);
       setDocuments(result.items);
+      // Drop any selection that no longer exists.
+      setSelected((current) => {
+        const ids = new Set(result.items.map((d) => d.id));
+        return new Set([...current].filter((id) => ids.has(id)));
+      });
     } catch (e) {
       notify((e as Error).message, "error");
     } finally {
       setLoading(false);
     }
-  }, [workspace.id, search, notify]);
+  }, [workspace.id, search, showArchived, notify]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -58,20 +76,102 @@ export function Library({ workspace, onOpen, notify }: Props) {
     await load();
   }
 
+  function toggle(id: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setBusy(true);
+
+    let removed = 0;
+    for (const id of pendingDelete.ids) {
+      try {
+        await api.deleteDocument(id);
+        removed += 1;
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    }
+
+    setPendingDelete(null);
+    setSelected(new Set());
+    setBusy(false);
+    await load();
+    if (removed) {
+      notify(`Deleted ${removed} document${removed === 1 ? "" : "s"}`, "ok");
+    }
+  }
+
+  async function setArchived(ids: string[], archived: boolean) {
+    setBusy(true);
+    for (const id of ids) {
+      try {
+        archived ? await api.archiveDocument(id) : await api.unarchiveDocument(id);
+      } catch (e) {
+        notify((e as Error).message, "error");
+      }
+    }
+    setSelected(new Set());
+    setBusy(false);
+    await load();
+    notify(archived ? "Archived" : "Restored", "ok");
+  }
+
+  const chosen = documents.filter((d) => selected.has(d.id));
+
   return (
     <div className="library">
       <div className="library-head">
         <h2>{workspace.name}</h2>
         <span className="badge info">{documents.length} document(s)</span>
         <div style={{ flex: 1 }} />
+
+        <label className="row small muted" style={{ cursor: "pointer" }}>
+          <input type="checkbox" checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)} />
+          Show archived
+        </label>
+
         <input
           className="input"
-          style={{ maxWidth: 240 }}
+          style={{ maxWidth: 220 }}
           placeholder="Search filenames…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
+
+      {selected.size > 0 && (
+        <div className="card selection-bar">
+          <strong className="small">{selected.size} selected</strong>
+          <div style={{ flex: 1 }} />
+          <button className="btn sm" disabled={busy}
+            onClick={() => setArchived([...selected], true)}>
+            Archive
+          </button>
+          {showArchived && (
+            <button className="btn sm" disabled={busy}
+              onClick={() => setArchived([...selected], false)}>
+              Restore
+            </button>
+          )}
+          <button className="btn sm danger" disabled={busy}
+            onClick={() => setPendingDelete({
+              ids: chosen.map((d) => d.id),
+              names: chosen.map((d) => d.filename),
+            })}>
+            Delete
+          </button>
+          <button className="btn sm ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
 
       <div
         className={`dropzone ${over ? "over" : ""}`}
@@ -81,11 +181,9 @@ export function Library({ workspace, onOpen, notify }: Props) {
       >
         <input ref={fileRef} type="file" accept="application/pdf" multiple hidden
           onChange={(e) => upload(e.target.files)} />
-        <p className="muted" style={{ marginTop: 0 }}>
-          Drop PDFs here, or
-        </p>
+        <p className="muted" style={{ marginTop: 0 }}>Drop PDFs here, or</p>
         <button className="btn primary" disabled={busy} onClick={() => fileRef.current?.click()}>
-          {busy ? "Uploading…" : "Choose files"}
+          {busy ? "Working…" : "Choose files"}
         </button>
         <p className="small muted" style={{ marginBottom: 0 }}>
           PDF only. Content is validated by magic bytes, not by filename.
@@ -96,27 +194,106 @@ export function Library({ workspace, onOpen, notify }: Props) {
         <div className="row"><span className="spinner" /> Loading…</div>
       ) : documents.length === 0 ? (
         <div className="empty">
-          <h4>No documents yet</h4>
+          <h4>{showArchived ? "Nothing here" : "No documents yet"}</h4>
           <p className="small">Upload a PDF to get started.</p>
         </div>
       ) : (
         <div className="doc-grid">
           {documents.map((doc) => (
-            <button key={doc.id} className="doc-card" onClick={() => onOpen(doc.id)}>
-              <h4 title={doc.filename}>{doc.filename}</h4>
-              <div className="spread">
+            <div key={doc.id}
+              className={`doc-card ${selected.has(doc.id) ? "picked" : ""}`}>
+              <div className="doc-card-top">
+                <input
+                  type="checkbox"
+                  checked={selected.has(doc.id)}
+                  onChange={() => toggle(doc.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Select ${doc.filename}`}
+                />
+                <button className="doc-open" onClick={() => onOpen(doc.id)}
+                  title={doc.filename}>
+                  {doc.filename}
+                </button>
+              </div>
+
+              <div className="spread" style={{ marginTop: 6 }}>
                 <span className="small muted">
                   {doc.page_count ? `${doc.page_count} pages · ` : ""}
                   {humanSize(doc.size_bytes)}
                 </span>
                 <span className={`badge ${
-                  doc.status === "ready" ? "ok"
-                    : doc.status === "failed" ? "bad" : "info"}`}>
-                  {doc.status}
+                  doc.is_archived ? "warn"
+                    : doc.status === "ready" ? "ok"
+                      : doc.status === "failed" ? "bad" : "info"}`}>
+                  {doc.is_archived ? "archived" : doc.status}
                 </span>
               </div>
-            </button>
+
+              <div className="row doc-actions">
+                <button className="btn sm ghost" onClick={() => onOpen(doc.id)}>
+                  Open
+                </button>
+                <button className="btn sm ghost"
+                  onClick={() => setArchived([doc.id], !doc.is_archived)}
+                  title={doc.is_archived
+                    ? "Bring it back to the main list"
+                    : "Hide it from the list — reversible"}>
+                  {doc.is_archived ? "Restore" : "Archive"}
+                </button>
+                <button className="btn sm ghost" style={{ color: "var(--bad)" }}
+                  onClick={() => setPendingDelete({
+                    ids: [doc.id], names: [doc.filename],
+                  })}
+                  title="Permanently delete this document and all its versions">
+                  Delete
+                </button>
+              </div>
+            </div>
           ))}
+        </div>
+      )}
+
+      {pendingDelete && (
+        <div className="modal-backdrop" onClick={() => setPendingDelete(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              Delete {pendingDelete.ids.length} document
+              {pendingDelete.ids.length === 1 ? "" : "s"}?
+            </h3>
+
+            <div className="error" style={{ marginBottom: "0.9rem" }}>
+              This cannot be undone. Every version, annotation, signature
+              request and stored file is removed permanently.
+            </div>
+
+            <div style={{ maxHeight: 200, overflow: "auto", marginBottom: "1rem" }}>
+              {pendingDelete.names.map((name, index) => (
+                <div key={index} className="small" style={{ padding: "2px 0" }}>
+                  {name}
+                </div>
+              ))}
+            </div>
+
+            <p className="small muted" style={{ marginTop: 0 }}>
+              If you only want it off your dashboard, archive it instead —
+              that is reversible.
+            </p>
+
+            <div className="row">
+              <button className="btn danger" disabled={busy} onClick={confirmDelete}>
+                {busy ? "Deleting…" : "Yes, delete permanently"}
+              </button>
+              <button className="btn" disabled={busy} onClick={() => {
+                setArchived(pendingDelete.ids, true);
+                setPendingDelete(null);
+              }}>
+                Archive instead
+              </button>
+              <button className="btn ghost" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

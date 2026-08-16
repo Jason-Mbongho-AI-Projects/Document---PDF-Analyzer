@@ -483,10 +483,11 @@ export const api = {
     }),
 
   // --- documents
-  documents: (workspaceId: string, search = "") =>
+  documents: (workspaceId: string, search = "", includeArchived = false) =>
     request<{ items: DocumentSummary[]; total: number }>(
       `/api/v1/documents?workspace_id=${encodeURIComponent(workspaceId)}` +
-        (search ? `&search=${encodeURIComponent(search)}` : ""),
+        (search ? `&search=${encodeURIComponent(search)}` : "") +
+        (includeArchived ? "&include_archived=true" : ""),
     ),
 
   document: (id: string) => request<DocumentDetail>(`/api/v1/documents/${id}`),
@@ -501,8 +502,16 @@ export const api = {
     });
   },
 
+  /** Permanent: removes the database rows AND every stored byte. */
   deleteDocument: (id: string) =>
     request<void>(`/api/v1/documents/${id}`, { method: "DELETE" }),
+
+  /** Reversible: hides the document from the default listing. */
+  archiveDocument: (id: string) =>
+    request<DocumentSummary>(`/api/v1/documents/${id}/archive`, { method: "POST" }),
+
+  unarchiveDocument: (id: string) =>
+    request<DocumentSummary>(`/api/v1/documents/${id}/restore`, { method: "POST" }),
 
   downloadBuffer: (id: string, version?: number) =>
     requestBuffer(

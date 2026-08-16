@@ -304,18 +304,49 @@ label.field > span {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--e2);
-  padding: 1rem;
-  cursor: pointer;
-  transition: transform 0.35s var(--ease), box-shadow 0.35s var(--ease);
+  padding: 0.85rem 1rem;
+  transition: transform 0.35s var(--ease), box-shadow 0.35s var(--ease),
+    border-color 0.25s;
   text-align: left;
 }
 .doc-card:hover { transform: translateY(-4px); box-shadow: var(--e3); }
-.doc-card h4 {
+.doc-card.picked { border-color: var(--blue); box-shadow: var(--ring); }
+
+.doc-card-top { display: flex; align-items: flex-start; gap: 0.5rem; }
+
+/* The filename is the primary action, so it is a real button. */
+.doc-open {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-weight: 600;
   font-size: 0.9rem;
-  margin-bottom: 0.35rem;
+  color: var(--ink);
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.doc-open:hover { color: var(--blue); text-decoration: underline; }
+
+.doc-actions {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+  border-color: var(--blue-hi);
+  box-shadow: var(--e2), var(--ring);
 }
 
 /* ------------------------------------------------------------- rails */
