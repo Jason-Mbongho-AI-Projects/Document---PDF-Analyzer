@@ -18,7 +18,17 @@ class CacheManager:
 
     def __init__(self, cache_dir: str = Config.CACHE_DIR):
         self.cache_dir = cache_dir
-        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        # A cache that cannot be written is a miss, not a crash. Some hosts
+        # mount the application read-only, and this runs at import time.
+        try:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            self.enabled = True
+        except OSError:
+            logger.warning(
+                "Cache directory %s is not writable; running without a cache.",
+                cache_dir,
+            )
+            self.enabled = False
 
     @staticmethod
     def _generate_cache_key(file_name: str, file_hash: str, summary_type: str) -> str:
@@ -43,7 +53,7 @@ class CacheManager:
         Returns:
             Cached data or None if not found/expired
         """
-        if not Config.ENABLE_CACHING:
+        if not Config.ENABLE_CACHING or not self.enabled:
             return None
 
         cache_key = self._generate_cache_key(file_name, file_hash, summary_type)
@@ -86,7 +96,7 @@ class CacheManager:
         Returns:
             True if successful, False otherwise
         """
-        if not Config.ENABLE_CACHING:
+        if not Config.ENABLE_CACHING or not self.enabled:
             return True
 
         cache_key = self._generate_cache_key(file_name, file_hash, summary_type)

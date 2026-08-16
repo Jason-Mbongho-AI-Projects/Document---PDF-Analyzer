@@ -51,10 +51,43 @@ STEPS = [
 
 # --------------------------------------------------------------------- setup
 
+def _is_hosted() -> bool:
+    """True when running on a hosted platform rather than a local checkout.
+
+    Only used to point people at the right place to put their API key: a
+    hosted app has no .env to edit, and telling someone to create one there
+    sends them somewhere that cannot work.
+    """
+    if any(os.getenv(name) for name in
+           ("STREAMLIT_RUNTIME_ENV", "STREAMLIT_SERVER_HEADLESS_HOSTED",
+            "DYNO", "K_SERVICE", "RENDER", "RAILWAY_ENVIRONMENT")):
+        return True
+    # Streamlit Community Cloud checks out the repo under /mount/src. Compared
+    # raw rather than via abspath(), which on Windows would rewrite a POSIX
+    # path into a drive-relative one and never match.
+    return __file__.replace("\\", "/").startswith("/mount/src")
+
+
 def api_key_ready() -> tuple[bool, str, str]:
     """Return (ok, badge_kind, message) for the credential panel."""
     load_dotenv()
     key = os.getenv("OPENROUTER_API_KEY")
+
+    # Streamlit Cloud exposes secrets as environment variables, but only after
+    # the runtime starts. Fall back to st.secrets so the key is found whichever
+    # way it was provided.
+    if not key:
+        try:
+            key = st.secrets.get("OPENROUTER_API_KEY")  # type: ignore[union-attr]
+        except Exception:
+            # No secrets.toml at all — a perfectly normal local setup.
+            key = None
+        if key:
+            # Publish it so Config and the summariser, which both read the
+            # environment, see the same key this check just accepted.
+            os.environ["OPENROUTER_API_KEY"] = str(key)
+            Config.OPENROUTER_API_KEY = str(key)
+
     if not key:
         return False, "bad", "No API key found"
     if len(key) < 30:
@@ -474,9 +507,17 @@ def main():
     if not opts["key_ok"]:
         ui.section("!", "Credentials required",
                    "The summariser needs an OpenRouter key before it can run")
-        ui.empty("🔑", "Add OPENROUTER_API_KEY to your .env",
-                 "Create a .env file next to app.py containing OPENROUTER_API_KEY=… — "
-                 "keys are issued at openrouter.ai/keys.")
+        # Hosted deployments have no .env to edit, so name the right place for
+        # wherever this is actually running rather than only the local one.
+        if _is_hosted():
+            ui.empty("🔑", "Add OPENROUTER_API_KEY in Settings → Secrets",
+                     "Open Manage app → Settings → Secrets and add a line reading "
+                     "OPENROUTER_API_KEY = \"sk-or-v1-…\", then reboot the app. "
+                     "Keys are issued at openrouter.ai/keys.")
+        else:
+            ui.empty("🔑", "Add OPENROUTER_API_KEY to your .env",
+                     "Create a .env file next to app.py containing OPENROUTER_API_KEY=… — "
+                     "keys are issued at openrouter.ai/keys.")
         return
 
     ui.section("↑", "Source document",

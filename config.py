@@ -76,15 +76,30 @@ class Config:
         }
 
     @classmethod
+    def ensure_directories(cls) -> None:
+        """Create the working directories, tolerating a read-only filesystem.
+
+        Separate from validate() and called first: these directories are not
+        contingent on the API key being present, and creating them used to sit
+        after the key check, so a missing key left the log directory absent and
+        the logging setup died on a FileNotFoundError instead.
+        """
+        for directory in (cls.CACHE_DIR, cls.SESSION_HISTORY_DIR, cls.LOG_DIR):
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except OSError:
+                # Some hosts mount the application read-only. Callers must
+                # degrade rather than refuse to start.
+                pass
+
+    @classmethod
     def validate(cls) -> bool:
         """Validate critical configuration"""
+        cls.ensure_directories()
+
         if not cls.OPENROUTER_API_KEY:
             raise ValueError("OPENROUTER_API_KEY not set in environment")
-        
-        os.makedirs(cls.CACHE_DIR, exist_ok=True)
-        os.makedirs(cls.SESSION_HISTORY_DIR, exist_ok=True)
-        os.makedirs(cls.LOG_DIR, exist_ok=True)
-        
+
         return True
 
 

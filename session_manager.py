@@ -17,7 +17,17 @@ class SessionManager:
 
     def __init__(self, session_dir: str = Config.SESSION_HISTORY_DIR):
         self.session_dir = session_dir
-        Path(session_dir).mkdir(parents=True, exist_ok=True)
+        # Runs at import time, and some hosts mount the application
+        # read-only. Losing history is acceptable; failing to start is not.
+        try:
+            Path(session_dir).mkdir(parents=True, exist_ok=True)
+            self.enabled = True
+        except OSError:
+            logger.warning(
+                "Session directory %s is not writable; history is disabled.",
+                session_dir,
+            )
+            self.enabled = False
         self.history_file = os.path.join(session_dir, "history.json")
 
     def _load_history(self) -> Dict[str, Any]:
