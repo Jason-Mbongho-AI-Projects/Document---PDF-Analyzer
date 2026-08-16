@@ -462,6 +462,20 @@ def images_to_pdf(images: Sequence[bytes], *, page_size: str = "fit") -> bytes:
     return buffer.getvalue()
 
 
+def _office_environment() -> dict:
+    """A child environment LibreOffice's own Python will not trip over.
+
+    LibreOffice ships its own interpreter. Launched from inside a virtualenv it
+    inherits PYTHONHOME and PYTHONPATH pointing at ours, and reports "Could not
+    find platform independent libraries" — sometimes only as a warning, but it
+    is a real source of first-run failures.
+    """
+    env = dict(os.environ)
+    for name in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONEXECUTABLE"):
+        env.pop(name, None)
+    return env
+
+
 def office_to_pdf(raw: bytes, extension: str) -> bytes:
     """Convert an office document via LibreOffice, if available."""
     binary = _office_binary()
@@ -474,24 +488,49 @@ def office_to_pdf(raw: bytes, extension: str) -> bytes:
     with tempfile.TemporaryDirectory() as workdir:
         source = Path(workdir) / f"input.{extension}"
         source.write_bytes(raw)
-
-        try:
-            subprocess.run(
-                [binary, "--headless", "--norestore", "--convert-to", "pdf",
-                 "--outdir", workdir, str(source)],
-                check=True, capture_output=True, timeout=180,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise PDFEngineError("The conversion timed out.") from exc
-        except subprocess.CalledProcessError as exc:
-            raise PDFEngineError(
-                f"The office converter failed: {exc.stderr.decode(errors='replace')[:200]}"
-            ) from exc
-
         produced = Path(workdir) / "input.pdf"
-        if not produced.exists():
-            raise PDFEngineError("The office converter produced no output.")
-        return produced.read_bytes()
+
+        # A private profile per conversion. Two things depend on it: the very
+        # first run on a fresh install has to create a profile, and it fails
+        # rather than doing so silently; and concurrent conversions sharing the
+        # default profile contend for its lock, which matters as soon as the
+        # worker runs jobs in parallel.
+        profile = Path(workdir) / "profile"
+        profile.mkdir()
+        command = [
+            binary,
+            f"-env:UserInstallation={profile.as_uri()}",
+            "--headless", "--norestore", "--invisible", "--nologo",
+            "--nolockcheck", "--nodefault",
+            "--convert-to", "pdf", "--outdir", workdir, str(source),
+        ]
+
+        last_error = ""
+        # Two attempts: profile creation can consume the first invocation, and
+        # a single retry is cheaper than telling the user their document is
+        # unconvertible when it is not.
+        for attempt in (1, 2):
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, timeout=180,
+                    env=_office_environment(),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise PDFEngineError("The conversion timed out.") from exc
+
+            if produced.exists() and produced.stat().st_size > 0:
+                return produced.read_bytes()
+
+            last_error = (
+                completed.stderr.decode(errors="replace").strip()
+                or completed.stdout.decode(errors="replace").strip()
+                or f"exit code {completed.returncode}"
+            )
+
+        raise PDFEngineError(
+            f"The office converter could not read this .{extension} file "
+            f"after {attempt} attempts: {last_error[:200]}"
+        )
 
 
 # --------------------------------------------------------------- registry
