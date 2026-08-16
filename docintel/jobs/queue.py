@@ -126,12 +126,11 @@ class DatabaseQueue(JobQueue):
 
 
 def get_queue() -> JobQueue:
-    if settings.queue_driver == "database":
-        return DatabaseQueue()
-    raise RuntimeError(
-        f"queue driver '{settings.queue_driver}' is configured but not implemented. "
-        "Only 'database' is available."
-    )
+    # `queue_driver` is Literal["database"], so settings validation rejects
+    # anything else before this runs. The indirection stays because it is the
+    # seam a second driver would be added at, but there is no unreachable
+    # error branch pretending to guard a choice that cannot be made.
+    return DatabaseQueue()
 
 
 queue = get_queue()
