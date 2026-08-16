@@ -3,7 +3,7 @@
 A document intelligence platform: read, analyse, edit, convert, redact, sign
 and translate PDFs.
 
-FastAPI backend, React + PDF.js frontend, background worker. 549 tests.
+FastAPI backend, React + PDF.js frontend, background worker. 592 tests.
 
 ---
 
@@ -125,6 +125,12 @@ question the product does not answer.
 LibreOffice. Without them the API returns 503 with install instructions rather
 than empty results that look like success.
 
+**OCR writes its result back.** Recognised words are added to the page as an
+invisible text layer positioned on the original word boxes, saved as a new
+version, so search, selection and the AI features can read a scan afterwards.
+The output is re-parsed first: if the text cannot be read back the operation
+fails rather than reporting a document as searchable when it is not.
+
 **Documents are untrusted input to the AI.** Every piece of extracted text is
 fenced in unguessable delimiters before it reaches a model, and the system
 prompt states it is data, never instructions.
@@ -151,9 +157,22 @@ so tenant isolation still applies and is tested in that mode. The server
 ## Testing
 
 ```bash
-.venv\Scripts\python -m pytest tests/ test_app.py -q    # 504 backend
-cd frontend && npm test                                 # 45 frontend
+.venv\Scripts\python -m pytest tests/ test_app.py -q    # 539 backend
+cd frontend && npm test                                 # 53 frontend
 ```
+
+### Enabling OCR
+
+```bash
+scoop install tesseract          # or winget install UB-Mannheim.TesseractOCR
+pip install pytesseract
+```
+
+Tesseract ships with no language data. Put the `.traineddata` files you need in
+its `tessdata` directory — `eng`, `deu`, `fra` and `spa` from
+[tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast) cover most
+cases. The OCR tests skip themselves when no engine is present; the layer-
+building tests do not need one.
 
 Tests open their outputs with the library that owns the format — python-docx
 reads the DOCX, openpyxl reads the XLSX, Pillow reads the images, pypdf reads

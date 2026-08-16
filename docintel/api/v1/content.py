@@ -250,6 +250,10 @@ class OcrRequest(BaseModel):
     pages: Optional[List[int]] = None
     language: str = Field(default="eng", max_length=20)
     source_version: Optional[int] = Field(default=None, ge=1)
+    # On by default: OCR whose result is not written back leaves the document
+    # exactly as unsearchable as before, and every other feature still sees an
+    # empty page.
+    save_searchable: bool = True
 
 
 @router.post("/ocr")
@@ -273,6 +277,37 @@ def run_ocr(document_id: str, body: OcrRequest, request: Request,
     result = _guard(lambda: provider.recognise(
         data, pages=body.pages, language=body.language))
 
+    # Write the recognised words back as an invisible text layer, so search,
+    # selection and every AI feature can read the document afterwards. The
+    # result is re-parsed before it is kept: a layer that cannot be read back
+    # would leave the document reported as searchable while still being empty.
+    version: Optional[int] = None
+    note = "Text recognised. Not saved to the document."
+
+    if body.save_searchable:
+        from docintel.pdf import ocr_layer
+
+        searchable = _guard(lambda: ocr_layer.build(data, result.pages))
+        still_empty = ocr_layer.verify(searchable, [p["page"] for p in result.pages])
+        if still_empty:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "The text layer could not be read back on page(s) "
+                    f"{', '.join(str(p) for p in still_empty)}, so it was discarded "
+                    "rather than saved as a searchable document that is not."
+                ),
+            )
+
+        saved = docsvc.add_version(
+            session, document, searchable, "ocr",
+            actor=user, action="pdf.ocr",
+            detail=f"{result.engine}, {result.language}, "
+                   f"{len(result.pages)} page(s)",
+        )
+        version = saved.version.version
+        note = f"Searchable text layer saved as version {version}."
+
     document.doc_metadata = {
         **(document.doc_metadata or {}),
         "ocr": {
@@ -280,6 +315,7 @@ def run_ocr(document_id: str, body: OcrRequest, request: Request,
             "language": result.language,
             "mean_confidence": result.mean_confidence,
             "pages": [p["page"] for p in result.pages],
+            "version": version,
         },
     }
     audit.record(session, action="document.ocr", actor=user,
@@ -292,5 +328,12 @@ def run_ocr(document_id: str, body: OcrRequest, request: Request,
         "engine": result.engine,
         "language": result.language,
         "mean_confidence": result.mean_confidence,
-        "pages": result.pages,
+        "version": version,
+        "note": note,
+        # Word geometry is large and only needed server-side to build the
+        # layer; the client wants the transcript.
+        "pages": [
+            {k: v for k, v in page.items() if k not in ("words", "image_size")}
+            for page in result.pages
+        ],
     }

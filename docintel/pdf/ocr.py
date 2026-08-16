@@ -82,6 +82,40 @@ class OcrAssessment:
         return mapping[self.classification]
 
 
+def _words_from(report: Dict[str, list]) -> List[Dict[str, object]]:
+    """Pull word boxes out of a pytesseract data report.
+
+    Entries with no text, or with a negative confidence, are layout rows
+    rather than words and would otherwise become empty boxes in the text
+    layer.
+    """
+    words: List[Dict[str, object]] = []
+    texts = report.get("text", [])
+
+    for index, raw in enumerate(texts):
+        word = str(raw).strip()
+        if not word:
+            continue
+        try:
+            confidence = float(report["conf"][index])
+        except (KeyError, IndexError, TypeError, ValueError):
+            confidence = -1.0
+        if confidence < 0:
+            continue
+        try:
+            words.append({
+                "text": word,
+                "left": int(report["left"][index]),
+                "top": int(report["top"][index]),
+                "width": int(report["width"][index]),
+                "height": int(report["height"][index]),
+                "conf": confidence,
+            })
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return words
+
+
 @dataclass
 class OcrResult:
     pages: List[Dict[str, object]]
@@ -219,6 +253,7 @@ class TesseractProvider(OCRProvider):
                 scores = [int(c) for c in report.get("conf", []) if str(c).lstrip("-").isdigit()]
                 scores = [s for s in scores if s >= 0]
                 page_confidence = sum(scores) / len(scores) if scores else None
+                words = _words_from(report)
             except Exception as exc:
                 raise PDFEngineError(f"OCR failed on page {number}: {exc}") from exc
 
@@ -230,6 +265,12 @@ class TesseractProvider(OCRProvider):
                 "text": text.strip(),
                 "confidence": round(page_confidence, 1) if page_confidence else None,
                 "characters": len(text.strip()),
+                # Word geometry, in pixels of the rendered image. Kept so the
+                # recognised text can be written back as a real, selectable
+                # text layer; without positions all that can be offered is a
+                # transcript in a side panel.
+                "words": words,
+                "image_size": [image.width, image.height],
             })
 
         return OcrResult(
