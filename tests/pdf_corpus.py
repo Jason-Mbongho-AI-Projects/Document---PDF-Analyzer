@@ -2,7 +2,7 @@
 Builds small, real PDFs carrying specific structural features.
 
 These are genuine PDF files with genuine object graphs, not fixtures that
-mock a parser. Every security test opens one of these through PyPDF2 exactly
+mock a parser. Every security test opens one of these through pypdf exactly
 the way the application opens an upload, so a passing test means the analyzer
 actually found the construct in a real file.
 """

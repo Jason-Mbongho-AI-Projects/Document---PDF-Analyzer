@@ -27,22 +27,32 @@ class KeywordExtractor:
         "we", "they", "what", "which", "who", "when", "where", "why", "how"
     }
 
+    # Links survive text extraction intact, and splitting one into words yields
+    # "https", the host and every path segment — which then out-rank the real
+    # subject of the document on frequency alone. Drop them before tokenising.
+    URL_RE = re.compile(r'(?:https?://|www\.|mailto:)\S+', re.IGNORECASE)
+    EMAIL_RE = re.compile(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b')
+
     @staticmethod
     def extract_keywords(text: str, num_keywords: int = 20, min_word_length: int = 4) -> List[str]:
         """
         Extract top keywords from text
-        
+
         Args:
             text: Input text to extract keywords from
             num_keywords: Number of keywords to return
             min_word_length: Minimum word length to consider
-        
+
         Returns:
             List of keywords
         """
         try:
+            # Strip links and addresses so their fragments cannot become keywords.
+            cleaned = KeywordExtractor.URL_RE.sub(" ", text)
+            cleaned = KeywordExtractor.EMAIL_RE.sub(" ", cleaned)
+
             # Convert to lowercase and remove special characters
-            words = re.findall(r'\b[a-z]+(?:\'[a-z]+)?\b', text.lower())
+            words = re.findall(r'\b[a-z]+(?:\'[a-z]+)?\b', cleaned.lower())
 
             # Filter stop words and short words
             filtered_words = [

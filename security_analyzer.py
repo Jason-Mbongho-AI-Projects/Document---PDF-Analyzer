@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-import PyPDF2
+import pypdf
 
 from logger_config import setup_logger
 
@@ -201,7 +201,7 @@ class PDFSecurityAnalyzer:
             pdf_file.seek(0)
             raw = pdf_file.read()
             pdf_file.seek(0)
-            reader = PyPDF2.PdfReader(pdf_file)
+            reader = pypdf.PdfReader(pdf_file)
         except Exception as exc:
             report.parse_error = str(exc)
             report.findings.append(Finding(

@@ -1,5 +1,5 @@
-# Import the PyPDF2 library to read and extract text and metadata from PDF files
-import PyPDF2
+# Import pypdf to read and extract text and metadata from PDF files
+import pypdf
 
 # Import regular expressions for text pattern matching and cleaning
 import re
@@ -33,7 +33,7 @@ class PDFProcessor:
         """
         try:
             # Read the PDF file
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            pdf_reader = pypdf.PdfReader(pdf_file)
             text = ""
 
             # Loop through each page to extract text
@@ -233,7 +233,7 @@ class PDFProcessor:
             A dictionary containing metadata fields or error info.
         """
         try:
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            pdf_reader = pypdf.PdfReader(pdf_file)
 
             # Extract standard metadata fields if available
             metadata = {

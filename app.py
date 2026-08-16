@@ -39,7 +39,7 @@ SUMMARY_MODES = {
 }
 
 STEPS = [
-    ("Extract text from PDF", "PyPDF2"),
+    ("Extract text from PDF", "pypdf"),
     ("Normalise and tokenise", "per page"),
     ("Segment into chunks", "token-bounded"),
     ("Read document structure", "optional"),

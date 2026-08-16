@@ -44,10 +44,9 @@ requests>=2.28.0
 
 # ---------------------------------------------------- legacy streamlit app
 # app.py is the original single-user prototype, retained while the platform
-# API is built out. PyPDF2 is deprecated upstream in favour of pypdf and is
-# only still here for that app.
+# API is built out. It now reads PDFs through pypdf like everything else —
+# PyPDF2 is deprecated upstream and is no longer a dependency.
 streamlit>=1.28.0
-pyPDF2>=3.0.1
 
 # ------------------------------------------------------------------- tests
 pytest>=7.0.0

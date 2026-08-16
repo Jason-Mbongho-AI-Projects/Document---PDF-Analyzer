@@ -178,6 +178,33 @@ class TestKeywordExtractor:
         # Should be empty or very few since all are stop words
         assert len(keywords) <= 2
 
+    def test_urls_do_not_become_keywords(self):
+        """A link must not contribute its scheme, host or path as keywords.
+
+        Extracted PDF text carries links verbatim. Tokenising one yields
+        "https", the host and every path segment, and on a short document
+        those out-rank the actual subject on frequency alone.
+        """
+        text = (
+            "Radiology staffing agreement for the clinic. "
+            "Apply at https://careers.example.com/apply?jobSeqNo=12345 "
+            "or visit www.example.com/careers/openings "
+            "or email recruiting@example.com for details."
+        )
+        keywords = KeywordExtractor.extract_keywords(text)
+
+        for noise in ("https", "careers", "example", "jobseqno", "recruiting"):
+            assert noise not in keywords, f"{noise!r} leaked in from a link"
+        assert "radiology" in keywords
+        assert "staffing" in keywords
+
+    def test_plain_words_matching_url_parts_still_count(self):
+        """Only actual links are stripped, not words that resemble them."""
+        text = "The clinic email policy governs email retention and email review."
+        keywords = KeywordExtractor.extract_keywords(text)
+
+        assert "email" in keywords
+
 
 class TestSentimentAnalyzer:
     """Test sentiment analysis"""
