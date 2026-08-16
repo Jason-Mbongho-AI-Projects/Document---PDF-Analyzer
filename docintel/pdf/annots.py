@@ -37,7 +37,7 @@ def _colour(value: str):
 
 
 def _rects(annotation: dict) -> List[dict]:
-    """Every rectangle an annotation covers, in PDF coordinates."""
+    """Every rectangle an annotation covers, in view coordinates."""
     quads = annotation.get("quads") or []
     if quads:
         return [q for q in quads if q.get("width") and q.get("height")]
@@ -46,6 +46,30 @@ def _rects(annotation: dict) -> List[dict]:
         return [rect]
     if rect:
         return [rect]      # a point, for notes
+    return []
+
+
+def _points(annotation: dict) -> List[dict]:
+    """The path of an arrow or a freehand stroke.
+
+    These are stored as a run of positions rather than areas, so they must not
+    go through the rectangle filter — a point legitimately has no width, and
+    filtering on size would discard the whole stroke.
+    """
+    quads = annotation.get("quads") or []
+    points = [q for q in quads if "x" in q and "y" in q]
+    if points:
+        return points
+
+    # An arrow with only a bounding box is drawn along its diagonal, which is
+    # how the earlier format recorded it.
+    rect = annotation.get("rect") or {}
+    if rect.get("width") is not None and rect.get("height") is not None:
+        return [
+            {"x": rect.get("x", 0), "y": rect.get("y", 0)},
+            {"x": rect.get("x", 0) + rect.get("width", 0),
+             "y": rect.get("y", 0) + rect.get("height", 0)},
+        ]
     return []
 
 
@@ -92,9 +116,16 @@ def _draw_one(pdf, annotation: dict, page_height: float,
     kind = str(annotation.get("kind") or "").lower()
     colour = _colour(str(annotation.get("colour") or DEFAULT_COLOUR))
     opacity = float(annotation.get("opacity") or 1.0)
-    rects = _rects(annotation)
-    if not rects:
-        return
+
+    # Arrows and freehand strokes are runs of points, not areas. Asking for
+    # rectangles first would filter them out — a point has no width — and the
+    # annotation would silently vanish.
+    if kind in ("arrow", "drawing"):
+        rects = []
+    else:
+        rects = _rects(annotation)
+        if not rects:
+            return
 
     pdf.saveState()
     try:
@@ -128,22 +159,32 @@ def _draw_one(pdf, annotation: dict, page_height: float,
                 _label(pdf, rects[0], page_height, str(annotation["body"]), colour)
 
         elif kind == "arrow":
+            path = _points(annotation)
+            if len(path) < 2:
+                return
             pdf.setStrokeColor(colour)
-            pdf.setStrokeAlpha(min(opacity, 1.0))
-            pdf.setLineWidth(1.4)
-            for rect in rects:
-                bottom = _bottom(rect, page_height)
-                pdf.line(rect["x"], bottom + rect["height"],
-                         rect["x"] + rect["width"], bottom)
-
-        elif kind == "drawing":
-            # Freehand is stored as a run of small rectangles along the stroke.
-            pdf.setStrokeColor(colour)
+            pdf.setFillColor(colour)
             pdf.setStrokeAlpha(min(opacity, 1.0))
             pdf.setLineWidth(1.6)
-            points = [(r["x"], _bottom(r, page_height)) for r in rects]
-            for (x1, y1), (x2, y2) in zip(points, points[1:]):
-                pdf.line(x1, y1, x2, y2)
+            start, end = path[0], path[-1]
+            x1, y1 = start["x"], page_height - start["y"]
+            x2, y2 = end["x"], page_height - end["y"]
+            pdf.line(x1, y1, x2, y2)
+            _arrow_head(pdf, x1, y1, x2, y2)
+
+        elif kind == "drawing":
+            path = _points(annotation)
+            if len(path) < 2:
+                return
+            pdf.setStrokeColor(colour)
+            pdf.setStrokeAlpha(min(opacity, 1.0))
+            pdf.setLineWidth(1.8)
+            pdf.setLineCap(1)               # round, so joins do not look chipped
+            track = pdf.beginPath()
+            track.moveTo(path[0]["x"], page_height - path[0]["y"])
+            for point in path[1:]:
+                track.lineTo(point["x"], page_height - point["y"])
+            pdf.drawPath(track, stroke=1, fill=0)
 
         elif kind in ("note", "comment", "stamp") and include_notes:
             rect = rects[0]
@@ -159,6 +200,26 @@ def _draw_one(pdf, annotation: dict, page_height: float,
                        bottom_override=bottom)
     finally:
         pdf.restoreState()
+
+
+def _arrow_head(pdf, x1: float, y1: float, x2: float, y2: float,
+                length: float = 9.0) -> None:
+    """A filled head at the far end, so the arrow points at something."""
+    import math
+
+    angle = math.atan2(y2 - y1, x2 - x1)
+    spread = math.radians(24)
+    left = (x2 - length * math.cos(angle - spread),
+            y2 - length * math.sin(angle - spread))
+    right = (x2 - length * math.cos(angle + spread),
+             y2 - length * math.sin(angle + spread))
+
+    head = pdf.beginPath()
+    head.moveTo(x2, y2)
+    head.lineTo(*left)
+    head.lineTo(*right)
+    head.close()
+    pdf.drawPath(head, stroke=0, fill=1)
 
 
 def _bottom(rect: dict, page_height: float) -> float:

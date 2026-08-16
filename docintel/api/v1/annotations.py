@@ -28,11 +28,21 @@ class Rect(BaseModel):
     height: float = Field(gt=0)
 
 
+class Point(BaseModel):
+    """A position on the page, for marks that are paths rather than areas."""
+    x: float
+    y: float
+
+
 class AnnotationCreate(BaseModel):
     kind: Literal[KINDS] = "highlight"          # type: ignore[valid-type]
     page: int = Field(ge=1)
     rect: Optional[Rect] = None
     quads: List[Rect] = Field(default_factory=list)
+    # Arrows and freehand strokes are runs of positions. They are kept
+    # separate from `quads` so rectangles can stay strictly validated: a
+    # highlight with no width is a bug, while a point with no width is normal.
+    points: List[Point] = Field(default_factory=list, max_length=5000)
     colour: str = Field(default="#FFD54F", max_length=20)
     opacity: float = Field(default=1.0, ge=0.05, le=1.0)
     selected_text: Optional[str] = Field(default=None, max_length=20000)
@@ -148,7 +158,10 @@ def create_annotation(document_id: str, body: AnnotationCreate, request: Request
         kind=AnnotationKind(body.kind),
         page=body.page,
         rect=body.rect.model_dump() if body.rect else {},
-        quads=[q.model_dump() for q in body.quads],
+        # Both land in `quads`: the column holds whichever geometry the kind
+        # uses, and the renderer knows which to expect from the kind.
+        quads=([p.model_dump() for p in body.points] if body.points
+               else [q.model_dump() for q in body.quads]),
         colour=body.colour,
         opacity=body.opacity,
         selected_text=body.selected_text,

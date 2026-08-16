@@ -266,6 +266,67 @@ def test_flatten_endpoint_writes_stored_annotations(alice):
     assert "written into the page" in response.json()["note"]
 
 
+def test_path_annotations_are_stored_as_points(alice):
+    """Arrows and freehand are runs of positions, not rectangles.
+
+    They used to be sent as quads and rejected: a quad must have width and
+    height, and a point has neither, so the mark silently never appeared.
+    """
+    document = alice.upload(make_pdf(), "doc.pdf").json()["document"]["id"]
+
+    response = alice.post(f"/api/v1/documents/{document}/annotations", json={
+        "kind": "arrow", "page": 1, "colour": "#1D4ED8",
+        "points": [{"x": 100, "y": 120}, {"x": 260, "y": 210}],
+    })
+
+    assert response.status_code in (200, 201), response.text
+    stored = response.json()
+    assert len(stored["quads"]) == 2
+    assert stored["quads"][0]["x"] == 100
+
+
+def test_a_freehand_stroke_keeps_its_order(alice):
+    document = alice.upload(make_pdf(), "doc.pdf").json()["document"]["id"]
+    path = [{"x": 10 + i * 5, "y": 40 + i} for i in range(12)]
+
+    response = alice.post(f"/api/v1/documents/{document}/annotations", json={
+        "kind": "drawing", "page": 1, "colour": "#BE123C", "points": path,
+    })
+
+    quads = response.json()["quads"]
+    assert [q["x"] for q in quads] == [p["x"] for p in path]
+
+
+def test_a_rectangle_annotation_still_requires_a_size(alice):
+    """Loosening points must not loosen areas: a zero-size highlight is a bug."""
+    document = alice.upload(make_pdf(), "doc.pdf").json()["document"]["id"]
+
+    response = alice.post(f"/api/v1/documents/{document}/annotations", json={
+        "kind": "highlight", "page": 1,
+        "rect": {"x": 10, "y": 10, "width": 0, "height": 0},
+    })
+
+    assert response.status_code == 422
+
+
+def test_drawn_marks_flatten_into_the_file(alice):
+    """The whole point of drawing them is that they can leave the app."""
+    document = alice.upload(make_pdf(), "doc.pdf").json()["document"]["id"]
+    alice.post(f"/api/v1/documents/{document}/annotations", json={
+        "kind": "arrow", "page": 1, "colour": "#1D4ED8",
+        "points": [{"x": 100, "y": 120}, {"x": 260, "y": 210}]})
+    alice.post(f"/api/v1/documents/{document}/annotations", json={
+        "kind": "drawing", "page": 1, "colour": "#BE123C",
+        "points": [{"x": 300 + i * 4, "y": 300} for i in range(10)]})
+
+    response = alice.post(f"/api/v1/documents/{document}/annotations/flatten")
+
+    assert response.status_code == 200, response.text
+    before = alice.get(f"/api/v1/documents/{document}/download?version=1").content
+    after = alice.get(f"/api/v1/documents/{document}/download").content
+    assert after != before
+
+
 def test_properties_endpoint_reports_hidden_data(alice):
     document = alice.upload(make_pdf(), "doc.pdf").json()["document"]["id"]
 

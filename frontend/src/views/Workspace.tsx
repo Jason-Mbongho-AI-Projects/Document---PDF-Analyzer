@@ -12,7 +12,10 @@ import {
   api, type AiSelectionResult, type Annotation, type DocumentDetail,
   type RedactCandidate, type SearchMatch,
 } from "../api";
-import { PdfPage, annotationOverlays, type Overlay } from "../components/PdfPage";
+import {
+  PdfPage, annotationOverlays, annotationStrokes,
+  type DrawTool, type Overlay, type Stroke,
+} from "../components/PdfPage";
 import { Thumbnail } from "../components/Thumbnail";
 import { SelectionToolbar, readSelection, type Selection } from "../components/SelectionToolbar";
 import {
@@ -35,7 +38,13 @@ import { FormBuilderPanel, VersionsPanel, draftFromRect,
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
-type Tool = "select" | "snapshot";
+type Tool = "select" | "snapshot" | DrawTool;
+
+/** Colours offered for marks, kept few so the choice is quick. */
+const MARK_COLOURS = ["#BE123C", "#1D4ED8", "#047857", "#B45309", "#7C3AED"];
+const DRAW_TOOLS: DrawTool[] = ["shape", "arrow", "draw", "textbox", "note"];
+/** Size of a note pin, in PDF points. */
+const PIN = 18;
 type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
   | "security" | "form" | "builder" | "redact" | "convert" | "compare"
   | "sign" | "translate" | "ocr" | "versions"
@@ -63,6 +72,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
   const fittedRef = useRef(false);
   const [current, setCurrent] = useState(1);
   const [tool, setTool] = useState<Tool>("select");
+  const [markColour, setMarkColour] = useState(MARK_COLOURS[0]);
   const [tab, setTab] = useState<Tab>("summarise");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -172,6 +182,54 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
       document.removeEventListener("selectionchange", onUp);
     };
   }, [scale, tool]);
+
+  /** Turn a drawn gesture into a stored annotation.
+   *
+   * Marks are stored like every other annotation: alongside the document
+   * rather than inside it, so drawing never rewrites the file. The Document
+   * tab writes them in when a flattened copy is wanted.
+   */
+  async function addMark(
+    pageNumber: number,
+    drawn: DrawTool,
+    result: { rect?: { x: number; y: number; width: number; height: number };
+              points?: { x: number; y: number }[] },
+  ) {
+    const kind = drawn === "draw" ? "drawing" : drawn;
+    let body: string | undefined;
+
+    if (drawn === "textbox" || drawn === "note") {
+      const typed = window.prompt(
+        drawn === "note" ? "Note text" : "Text for the box");
+      if (typed === null) return;          // cancelled
+      body = typed;
+    }
+
+    try {
+      // The server validates rectangles strictly — width and height must be
+      // positive — so a zero-sized rect is rejected rather than stored. Paths
+      // send no rect at all, and a note gets a pin-sized one at the point
+      // that was clicked.
+      const rect = result.points
+        ? undefined
+        : drawn === "note"
+          ? { x: result.rect!.x, y: result.rect!.y, width: PIN, height: PIN }
+          : result.rect;
+
+      await api.createAnnotation(documentId, {
+        kind: kind as Annotation["kind"],
+        page: pageNumber,
+        ...(rect ? { rect } : {}),
+        points: result.points ?? [],
+        colour: markColour,
+        opacity: 1,
+        body,
+      });
+      setAnnotations(await api.annotations(documentId));
+    } catch (e) {
+      notify((e as Error).message, "error");
+    }
+  }
 
   async function addMarkup(kind: Annotation["kind"], colour: string, body?: string) {
     if (!selection) return;
@@ -358,6 +416,20 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
     return map;
   }, [annotations, hits, hitIndex, redactPreview, drafts]);
 
+  /** Arrow and freehand annotations, grouped by page for the SVG layer. */
+  const strokesByPage = useMemo(() => {
+    const grouped = new Map<number, Stroke[]>();
+    for (const annotation of annotations) {
+      for (const stroke of annotationStrokes(
+        annotation, () => { setTab("comments"); })) {
+        const list = grouped.get(annotation.page) ?? [];
+        list.push(stroke);
+        grouped.set(annotation.page, list);
+      }
+    }
+    return grouped;
+  }, [annotations]);
+
   // ------------------------------------------------------------ render
 
   if (loading) {
@@ -390,6 +462,37 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
         <button className={`tool ${tool === "snapshot" ? "active" : ""}`}
           onClick={() => setTool("snapshot")}
           title="Drag a region to capture it as an image">Snapshot</button>
+
+        <span className="divider" />
+
+        {/* Drawing tools. Each stays active until switched off, so several
+            marks can be made without returning to the toolbar between them. */}
+        {([
+          ["shape", "Box", "Drag a rectangle"],
+          ["arrow", "Arrow", "Drag from the note towards what it points at"],
+          ["draw", "Draw", "Freehand"],
+          ["textbox", "Text box", "Drag a box, then type the text"],
+          ["note", "Note", "Click to drop a note pin"],
+        ] as [DrawTool, string, string][]).map(([value, label, hint]) => (
+          <button key={value} title={hint}
+            className={`tool ${tool === value ? "active" : ""}`}
+            onClick={() => setTool(tool === value ? "select" : value)}>
+            {label}
+          </button>
+        ))}
+
+        <span className="row" style={{ gap: 3 }} title="Colour for new marks">
+          {MARK_COLOURS.map((colour) => (
+            <button key={colour} aria-label={`Mark colour ${colour}`}
+              onClick={() => setMarkColour(colour)}
+              style={{
+                width: 16, height: 16, borderRadius: "50%", background: colour,
+                border: markColour === colour
+                  ? "2px solid var(--ink)" : "1px solid var(--line)",
+                cursor: "pointer", padding: 0,
+              }} />
+          ))}
+        </span>
 
         <span className="divider" />
 
@@ -573,7 +676,11 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
               pageNumber={index + 1}
               scale={scale}
               overlays={overlaysByPage.get(index + 1) ?? []}
+              strokes={strokesByPage.get(index + 1) ?? []}
               snapshotMode={tool === "snapshot" || placing !== null}
+              drawTool={DRAW_TOOLS.includes(tool as DrawTool)
+                ? (tool as DrawTool) : null}
+              onDraw={addMark}
               onSnapshot={(pageNumber, rect) => {
                 if (placing) {
                   setDrafts((current) =>

@@ -825,3 +825,31 @@ label.field > span {
   border: 1.5px dashed var(--blue);
   border-radius: 4px;
 }
+
+/* Drawing tools ---------------------------------------------------------
+   Arrows and freehand strokes are paths, so they render in their own SVG
+   layer above the page rather than as positioned rectangles. */
+.ink-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: visible;
+}
+.ink-layer * { pointer-events: none; }
+.ink-layer [style*="pointer-events: auto"] { pointer-events: auto; }
+
+/* A shape or text box drawn by the user: outline only, so it never hides
+   the content it is marking. */
+.annot.shape,
+.annot.textbox {
+  background: none !important;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.annot.textbox { border-style: dashed; }
+.annot.stamp {
+  background: none !important;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+}

@@ -549,7 +549,12 @@ export const api = {
   annotations: (id: string) =>
     request<Annotation[]>(`/api/v1/documents/${id}/annotations`),
 
-  createAnnotation: (id: string, body: Partial<Annotation> & { kind: AnnotationKind; page: number }) =>
+  createAnnotation: (
+    id: string,
+    // `points` carries arrows and freehand strokes; `quads` carries areas.
+    body: Partial<Annotation> & { kind: AnnotationKind; page: number;
+                                  points?: { x: number; y: number }[] },
+  ) =>
     request<Annotation>(`/api/v1/documents/${id}/annotations`, {
       method: "POST",
       body: json(body),
