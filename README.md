@@ -14,7 +14,7 @@ Three processes. Python 3.13, Node 20+.
 ```bash
 # 1. install
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt        # Windows
+.venv\Scripts\pip install -r requirements-platform.txt   # Windows
 cd frontend && npm install && cd ..
 
 # 2. configure
@@ -224,3 +224,34 @@ processes without a broker.
 
 `app.py` is the original single-user Streamlit prototype, kept for reference.
 It is not part of the platform.
+
+---
+
+## Requirements files
+
+Three, because two very different things live in this repo.
+
+| File | Installs | Who reads it |
+|---|---|---|
+| `requirements.txt` | the Streamlit app only — 6 direct packages | Streamlit Community Cloud, which always reads this name |
+| `requirements-platform.txt` | the FastAPI platform, worker and tests (includes the above) | you, for local development |
+| `requirements-deploy.txt` | `psycopg` and `boto3` | only when switching on Postgres or S3 |
+
+The split exists because Streamlit Cloud installs whatever sits in
+`requirements.txt`, and that used to be the entire platform — including
+`pikepdf`, `cryptography` and `bcrypt`, which compile C++ or Rust from source
+when no wheel matches the runtime's Python version. `app.py` imports none of
+them.
+
+### Deploying `app.py` to Streamlit Community Cloud
+
+Main file is `app.py`. Add your key under **Manage app → Settings → Secrets**:
+
+```toml
+OPENROUTER_API_KEY = "sk-or-v1-..."
+```
+
+Without it the app still loads and says what is missing. Pick the Python
+version in the deploy dialog's advanced settings — 3.13 has wheels for
+everything here; 3.14 is new enough that some packages may still build from
+source.
