@@ -44,7 +44,17 @@ type Tool = "select" | "snapshot" | DrawTool;
 
 /** Colours offered for marks, kept few so the choice is quick. */
 const MARK_COLOURS = ["#BE123C", "#1D4ED8", "#047857", "#B45309", "#7C3AED"];
-const DRAW_TOOLS: DrawTool[] = ["shape", "arrow", "draw", "textbox", "note"];
+const DRAW_TOOLS: DrawTool[] = [
+  "shape", "arrow", "draw", "textbox", "note", "measure",
+];
+
+/** Units the measure tool can report, as multiples of a PDF point. */
+const UNITS: Record<string, { label: string; per: number }> = {
+  mm: { label: "mm", per: 25.4 / 72 },
+  cm: { label: "cm", per: 2.54 / 72 },
+  in: { label: "in", per: 1 / 72 },
+  pt: { label: "pt", per: 1 },
+};
 /** Size of a note pin, in PDF points. */
 const PIN = 18;
 type Tab = "summarise" | "analyse" | "ai" | "comments" | "search"
@@ -146,6 +156,8 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
   const [current, setCurrent] = useState(1);
   const [tool, setTool] = useState<Tool>("select");
   const [markColour, setMarkColour] = useState(MARK_COLOURS[0]);
+  const [unit, setUnit] = useState<keyof typeof UNITS>("mm");
+  const [measured, setMeasured] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("summarise");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -272,6 +284,17 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
     result: { rect?: { x: number; y: number; width: number; height: number };
               points?: { x: number; y: number }[] },
   ) {
+    if (drawn === "measure") {
+      const [from, to] = result.points ?? [];
+      if (!from || !to) return;
+      // Points are PDF points, and a point is 1/72 inch by definition, so the
+      // conversion is exact rather than a calibration guess.
+      const distance = Math.hypot(to.x - from.x, to.y - from.y);
+      const { label, per } = UNITS[unit];
+      setMeasured(`${(distance * per).toFixed(2)} ${label}`);
+      return;
+    }
+
     const kind = drawn === "draw" ? "drawing" : drawn;
     let body: string | undefined;
 
@@ -552,6 +575,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
           ["draw", "Draw", "Freehand"],
           ["textbox", "Text box", "Drag a box, then type the text"],
           ["note", "Note", "Click to drop a note pin"],
+          ["measure", "Measure", "Drag between two points to measure them"],
         ] as [DrawTool, string, string][]).map(([value, label, hint]) => (
           <button key={value} title={hint}
             className={`tool ${tool === value ? "active" : ""}`}
@@ -559,6 +583,21 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
             {label}
           </button>
         ))}
+
+        {tool === "measure" && (
+          <span className="row" style={{ gap: 4 }}>
+            <select className="input" style={{ maxWidth: 74, padding: "0.2rem 0.4rem" }}
+              value={unit} aria-label="Measurement units"
+              onChange={(e) => setUnit(e.target.value as keyof typeof UNITS)}>
+              {Object.entries(UNITS).map(([key, u]) => (
+                <option key={key} value={key}>{u.label}</option>
+              ))}
+            </select>
+            <strong className="small" style={{ color: "var(--blue)", minWidth: 74 }}>
+              {measured ?? "drag to measure"}
+            </strong>
+          </span>
+        )}
 
         <span className="row" style={{ gap: 3 }} title="Colour for new marks">
           {MARK_COLOURS.map((colour) => (

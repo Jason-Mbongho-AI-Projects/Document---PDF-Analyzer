@@ -3,7 +3,7 @@
 A document intelligence platform: read, analyse, edit, convert, redact, sign
 and translate PDFs.
 
-FastAPI backend, React + PDF.js frontend, background worker. 592 tests.
+FastAPI backend, React + PDF.js frontend, background worker. 730 tests.
 
 ---
 
@@ -53,8 +53,23 @@ highlight rectangles, snapshot any region to an image.
 key quotes, keywords, sentiment and readability. Ask questions and get answers
 with page citations.
 
-**Edit** — rotate, reorder by drag, delete, duplicate, extract, crop, split,
-merge, watermark, page numbers, headers and footers, compress.
+**Edit the text** — change, delete or add words on the page, choosing font,
+size, colour and weight. Removed text is deleted from the content stream, not
+covered over.
+
+**Edit the pages** — rotate, reorder by drag, delete, duplicate, extract,
+crop, split, combine, insert or replace pages from another document, add
+blank pages, watermark, page numbers, headers and footers, Bates numbering,
+compress.
+
+**Mark it up** — highlight, underline, strike through, boxes, arrows,
+freehand, text boxes and notes, in five colours. Comments live beside the
+document so annotating never rewrites it, and can be written into a copy when
+one is needed.
+
+**Measure** — drag between two points for a distance in mm, cm, inches or
+points. Exact, because a PDF point is one seventy-second of an inch by
+definition.
 
 **Forms** — detect and fill existing forms; build new fillable ones by
 dragging fields onto the page.
@@ -65,8 +80,13 @@ with sequential order, decline handling and an audit trail.
 **Secure** — static security scanner, true redaction, AES-256 protection,
 authorised unlock.
 
-**Convert** — PDF to text, Markdown, HTML, JSON, CSV, XLSX, DOCX and images;
-text, Markdown, CSV and images to PDF.
+**Convert** — PDF to text, Markdown, HTML, JSON, CSV, XLSX, DOCX, PPTX and
+images; text, Markdown, CSV, images and office files to PDF.
+
+**Structure** — document properties, bookmarks, hyperlinks and attachments,
+plus a report of the hidden data a file carries and a way to strip it.
+
+**Clean up a scan** — deskew, despeckle, normalise contrast, binarise.
 
 **Compare** — page-aligned diff with changed numbers and dates extracted.
 
@@ -76,6 +96,9 @@ terminology stays consistent.
 **On a phone** — the thumbnail rail and the tools panel become drawers rather
 than disappearing, the first page is fitted to the viewport width, and every
 drag gesture (page reorder, region snapshot, signing) works by touch.
+
+**Finding a tool** — twenty-odd tools grouped by the job they do, and
+Ctrl/Cmd-K to jump straight to one by name.
 
 ---
 
@@ -131,6 +154,12 @@ version, so search, selection and the AI features can read a scan afterwards.
 The output is re-parsed first: if the text cannot be read back the operation
 fails rather than reporting a document as searchable when it is not.
 
+**The viewer does not need the server.** Rendering, text selection,
+thumbnails and search all run in the browser on a document this tab has
+already downloaded, so they keep working if the API goes away. Anything that
+writes does not, and the app says so plainly rather than letting a button fail
+with an error that reads like a broken feature.
+
 **Documents are untrusted input to the AI.** Every piece of extracted text is
 fenced in unguessable delimiters before it reaches a model, and the system
 prompt states it is data, never instructions.
@@ -157,8 +186,8 @@ so tenant isolation still applies and is tested in that mode. The server
 ## Testing
 
 ```bash
-.venv\Scripts\python -m pytest tests/ test_app.py -q    # 539 backend
-cd frontend && npm test                                 # 53 frontend
+.venv\Scripts\python -m pytest tests/ test_app.py -q    # 657 backend
+cd frontend && npm test                                 # 73 frontend
 ```
 
 ### Enabling OCR

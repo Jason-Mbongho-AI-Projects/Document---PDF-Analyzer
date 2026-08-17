@@ -24,7 +24,11 @@ export interface Overlay {
 }
 
 /** Tools that draw a mark rather than select text. */
-export type DrawTool = "shape" | "arrow" | "draw" | "textbox" | "note";
+export type DrawTool =
+  | "shape" | "arrow" | "draw" | "textbox" | "note"
+  // Measure draws nothing on the page: it reports a distance and then
+  // clears, so it behaves like a drawing tool but stores no annotation.
+  | "measure";
 
 /** A path-based mark: arrows and freehand, which no rectangle can express. */
 export interface Stroke {
@@ -234,6 +238,16 @@ export function PdfPage({
       return;
     }
 
+    if (drawTool === "measure") {
+      onDraw?.(pageNumber, "measure", {
+        points: [
+          { x: from.x / scale, y: from.y / scale },
+          { x: to.x / scale, y: to.y / scale },
+        ],
+      });
+      return;
+    }
+
     if (drawTool === "arrow") {
       // Direction matters, so the two ends are kept rather than a bounding box.
       if (Math.hypot(to.x - from.x, to.y - from.y) > 8) {
@@ -297,7 +311,8 @@ export function PdfPage({
 
       {/* Arrows and freehand are paths, which no positioned div can express.
           Drawn in SVG over the page, and previewed live while dragging. */}
-      {(strokes.length > 0 || drawTool === "arrow" || drawTool === "draw") && (
+      {(strokes.length > 0 || drawTool === "arrow" || drawTool === "draw"
+        || drawTool === "measure") && (
         <svg className="ink-layer" width={width} height={height}
              viewBox={`0 0 ${width} ${height}`}>
           {strokes.map((stroke) => {
@@ -323,7 +338,7 @@ export function PdfPage({
             );
           })}
 
-          {drag && drawTool === "arrow" && (
+          {drag && (drawTool === "arrow" || drawTool === "measure") && (
             <line x1={drag.x0} y1={drag.y0} x2={drag.x1} y2={drag.y1}
                   stroke="#1D4ED8" strokeWidth={1.8} strokeDasharray="4 3" />
           )}
