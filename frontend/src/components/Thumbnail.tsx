@@ -13,7 +13,11 @@
  * ourselves — hence the movement threshold below.
  */
 import { useEffect, useRef, useState } from "react";
+import type { PDFPageProxy } from "pdfjs-dist";
 import { api } from "../api";
+
+/** Rail width in CSS pixels; thumbnails are drawn to fit it. */
+const THUMB_WIDTH = 220;
 
 /** Pixels of travel before a press becomes a drag rather than a tap. */
 const DRAG_THRESHOLD = 6;
@@ -24,6 +28,19 @@ interface Props {
   active: boolean;
   selected: boolean;
   version: number;      // bump to force a re-fetch after an edit
+  /**
+   * The already-loaded page, when the caller has one.
+   *
+   * The workspace holds every page in memory as a PDF.js proxy, so asking the
+   * server to rasterise them again is a request per page — five hundred of
+   * them on a long document — for pictures the browser can draw itself. When
+   * a proxy is supplied the thumbnail renders locally: no network, no token,
+   * faster, and it keeps working if the API goes away.
+   *
+   * The library has no loaded document, so it omits this and the server
+   * renders the cover as before.
+   */
+  proxy?: PDFPageProxy;
   dragging?: boolean;
   dropTarget?: boolean;
   onClick: (event: React.MouseEvent) => void;
@@ -47,7 +64,7 @@ function pageUnder(x: number, y: number): number | null {
 }
 
 export function Thumbnail({
-  documentId, page, active, selected, version, dragging, dropTarget,
+  documentId, page, active, selected, version, proxy, dragging, dropTarget,
   onClick, onDragStart, onDragOverPage, onDrop, onDragEnd,
 }: Props) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -74,22 +91,56 @@ export function Thumbnail({
     if (!visible) return;
     let objectUrl: string | null = null;
     let cancelled = false;
-
     setFailed(false);
-    api
-      .renderPage(documentId, page)
-      .then((blob) => {
+
+    async function draw() {
+      // Local first: the page is already decoded in this tab, so drawing it
+      // costs a canvas rather than a round trip.
+      if (proxy) {
+        try {
+          const viewport = proxy.getViewport({ scale: 1 });
+          const scale = Math.min(THUMB_WIDTH / viewport.width, 1);
+          const scaled = proxy.getViewport({ scale });
+
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.floor(scaled.width));
+          canvas.height = Math.max(1, Math.floor(scaled.height));
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("no 2d context");
+
+          await proxy.render({ canvasContext: context, viewport: scaled }).promise;
+          if (cancelled) return;
+
+          const blob: Blob | null = await new Promise((resolve) =>
+            canvas.toBlob(resolve, "image/png"));
+          if (cancelled || !blob) return;
+
+          objectUrl = URL.createObjectURL(blob);
+          setUrl(objectUrl);
+          return;
+        } catch {
+          // Fall through to the server, which can still rasterise a page
+          // this browser could not.
+        }
+      }
+
+      try {
+        const blob = await api.renderPage(documentId, page);
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setUrl(objectUrl);
-      })
-      .catch(() => !cancelled && setFailed(true));
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    }
+
+    draw();
 
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [documentId, page, visible, version]);
+  }, [documentId, page, visible, version, proxy]);
 
   const reorderable = !!onDragStart;
 

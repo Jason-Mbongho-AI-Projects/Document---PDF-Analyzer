@@ -1,6 +1,7 @@
 /** App shell: auth gate, workspace selection, library ⇄ workspace routing. */
 import { useCallback, useEffect, useState } from "react";
 import { api, getToken, onAuthChange, type User, type Workspace } from "./api";
+import { useApiHealth } from "./useApiHealth";
 import { Library } from "./views/Library";
 import { Workspace as DocumentWorkspace } from "./views/Workspace";
 import { SigningView } from "./views/SigningView";
@@ -28,6 +29,7 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [openAccess, setOpenAccess] = useState<boolean | null>(null);
   const [forceLogin, setForceLogin] = useState(false);
+  const { state: apiState, recheck } = useApiHealth();
 
   useEffect(() => onAuthChange(setTokenState), []);
 
@@ -145,6 +147,18 @@ export default function App() {
           <button className="btn sm ghost" onClick={() => setForceLogin(true)}>Sign in</button>
         )}
       </header>
+
+      {apiState === "offline" && (
+        <div className="offline-bar" role="status">
+          <strong>The server is not responding.</strong>
+          <span>
+            Reading, searching and moving around the open document still work —
+            they run in this browser. Anything that changes a document, and
+            anything that loads a new one, will fail until it is back.
+          </span>
+          <button className="btn sm" onClick={recheck}>Try again</button>
+        </div>
+      )}
 
       {openDocument ? (
         <DocumentWorkspace

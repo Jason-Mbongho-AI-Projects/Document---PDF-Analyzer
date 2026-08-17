@@ -3,10 +3,12 @@
  * Each is a thin view over an API call — no business logic lives here.
  */
 import { useEffect, useState } from "react";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
   api, type Annotation, type FormReport, type RedactCandidate,
   type SearchMatch, type SecurityReport,
 } from "../api";
+import { searchDocument } from "../localSearch";
 import {
   clearDraft, readDraft, useAutosaveDraft, type DraftStatus,
 } from "../useDraft";
@@ -78,9 +80,11 @@ export function CommentsPanel({
 // --------------------------------------------------------------- search
 
 export function SearchPanel({
-  documentId, onJump,
+  documentId, pdf, onJump,
 }: {
   documentId: string;
+  /** The loaded document, when this tab has one. */
+  pdf?: PDFDocumentProxy | null;
   onJump: (match: SearchMatch, index: number, all: SearchMatch[]) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -88,6 +92,7 @@ export function SearchPanel({
   const [matches, setMatches] = useState<SearchMatch[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [source, setSource] = useState<string | null>(null);
 
   async function run(event?: React.FormEvent) {
     event?.preventDefault();
@@ -95,8 +100,19 @@ export function SearchPanel({
     setBusy(true);
     setError("");
     try {
-      const result = await api.search(documentId, query, wholeWords);
-      setMatches(result.matches);
+      // Local first. The text and its geometry are already in this tab, so
+      // searching here answers immediately and keeps working if the API is
+      // unreachable. The server is the fallback: it reads the stored bytes,
+      // so it can search a document this tab has not finished loading.
+      if (pdf) {
+        const found = await searchDocument(pdf, query, { wholeWords });
+        setMatches(found as unknown as SearchMatch[]);
+        setSource("this browser");
+      } else {
+        const result = await api.search(documentId, query, wholeWords);
+        setMatches(result.matches);
+        setSource("the server");
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -130,6 +146,7 @@ export function SearchPanel({
       {matches && (
         <div className="small muted" style={{ marginBottom: 8 }}>
           {matches.length} match{matches.length === 1 ? "" : "es"}
+          {source ? ` · searched in ${source}` : ""}
         </div>
       )}
 

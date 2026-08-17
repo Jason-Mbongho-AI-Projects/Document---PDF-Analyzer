@@ -678,6 +678,8 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
                 key={number}
                 documentId={documentId}
                 page={number}
+                // Already decoded in this tab; no need to ask the server.
+                proxy={pages[index]}
                 active={current === number}
                 selected={selectedPages.has(number)}
                 dragging={dragFrom === number}
@@ -926,6 +928,7 @@ export function Workspace({ documentId, onBack, notify, onOpenDocument }: Props)
             {tab === "search" && (
               <SearchPanel
                 documentId={documentId}
+                pdf={pdf}
                 onJump={(match, index, all) => {
                   setHits(all);
                   setHitIndex(index);

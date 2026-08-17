@@ -77,9 +77,38 @@ async function handle(response: Response) {
   return response;
 }
 
+/**
+ * Announce that a call could not reach the server.
+ *
+ * Polling alone leaves up to half a minute where the app looks healthy and
+ * every button fails. A request that has just failed is the earliest and most
+ * reliable evidence there is, so it is broadcast the moment it happens.
+ */
+export const API_UNREACHABLE = "docintel:api-unreachable";
+export const API_REACHED = "docintel:api-reached";
+
+function announce(reachable: boolean) {
+  window.dispatchEvent(new CustomEvent(
+    reachable ? API_REACHED : API_UNREACHABLE));
+}
+
+/** fetch, reporting reachability. A network error is not an HTTP status. */
+async function reportingFetch(path: string, init: RequestInit): Promise<Response> {
+  try {
+    const response = await fetch(path, init);
+    // A 5xx from the dev proxy means the backend is not answering; a 4xx is
+    // the API itself replying, so the server is plainly up.
+    announce(response.status < 500);
+    return response;
+  } catch (error) {
+    announce(false);
+    throw error;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await handle(
-    await fetch(path, {
+    await reportingFetch(path, {
       ...init,
       headers: authHeaders({
         ...(init.body && !(init.body instanceof FormData)
@@ -95,13 +124,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 async function requestBlob(path: string, init: RequestInit = {}): Promise<Blob> {
   const response = await handle(
-    await fetch(path, { ...init, headers: authHeaders(init.headers as Record<string, string>) }),
+    await reportingFetch(path, {
+      ...init, headers: authHeaders(init.headers as Record<string, string>),
+    }),
   );
   return response.blob();
 }
 
 async function requestBuffer(path: string): Promise<ArrayBuffer> {
-  const response = await handle(await fetch(path, { headers: authHeaders() }));
+  const response = await handle(
+    await reportingFetch(path, { headers: authHeaders() }));
   return response.arrayBuffer();
 }
 
