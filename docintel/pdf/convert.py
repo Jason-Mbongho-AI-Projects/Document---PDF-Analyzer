@@ -187,6 +187,36 @@ def to_json(data: bytes, **_) -> Tuple[bytes, int, List[str]]:
     return json.dumps(payload, indent=2).encode("utf-8"), len(pages), []
 
 
+
+# XML — and therefore DOCX, XLSX and PPTX — accepts only a subset of Unicode.
+# Control characters below 0x20, the surrogate range, and the noncharacters
+# 0xFFFE/0xFFFF are all forbidden, and the libraries refuse the whole string
+# rather than the offending character.
+#
+# Extracted PDF text contains them more often than one would like: a glyph
+# that fails to map to Unicode frequently comes back as 0xFFFE. One such
+# character in a fifty-page document used to fail the entire export with
+# "All strings must be XML compatible", which tells the user nothing about
+# what to do.
+def _xml_ok(ch: str) -> bool:
+    codepoint = ord(ch)
+    return (codepoint in (0x09, 0x0A, 0x0D)
+            or 0x20 <= codepoint <= 0xD7FF
+            or 0xE000 <= codepoint <= 0xFFFD
+            or 0x10000 <= codepoint <= 0x10FFFF)
+
+
+def xml_safe(value) -> str:
+    """Text with the characters XML cannot carry removed.
+
+    They are dropped rather than replaced: an unmappable glyph carries no
+    meaning to preserve, and substituting a space or a marker would invent
+    content that was never in the document.
+    """
+    text = "" if value is None else str(value)
+    return "".join(ch for ch in text if _xml_ok(ch))
+
+
 # ---------------------------------------------------------------- tables
 
 def _detect_tables(data: bytes) -> List[dict]:
@@ -273,7 +303,9 @@ NUMERIC = re.compile(r"^-?[\d,]+(?:\.\d+)?$")
 
 
 def _coerce(value: str):
-    text = (value or "").strip()
+    # Cells reach openpyxl through here, and it rejects XML-invalid text the
+    # same way python-docx does.
+    text = xml_safe(value).strip()
     if NUMERIC.match(text):
         try:
             return float(text.replace(",", "")) if "." in text else int(text.replace(",", ""))
@@ -308,7 +340,7 @@ def to_docx(data: bytes, **_) -> Tuple[bytes, int, List[str]]:
         for line in text.splitlines():
             stripped = line.strip()
             if stripped:
-                document.add_paragraph(stripped)
+                document.add_paragraph(xml_safe(stripped))
 
         for rows in tables_by_page.get(number, []):
             if not rows:
@@ -317,7 +349,7 @@ def to_docx(data: bytes, **_) -> Tuple[bytes, int, List[str]]:
             table.style = "Table Grid"
             for row_index, row in enumerate(rows):
                 for column_index, cell in enumerate(row):
-                    table.cell(row_index, column_index).text = cell or ""
+                    table.cell(row_index, column_index).text = xml_safe(cell)
 
     buffer = io.BytesIO()
     document.save(buffer)
@@ -569,7 +601,7 @@ def to_pptx(data: bytes, scale: float = 2.0, **_) -> Tuple[bytes, int, List[str]
 
         text = (page.text or "").strip()
         if text:
-            slide.notes_slide.notes_text_frame.text = text
+            slide.notes_slide.notes_text_frame.text = xml_safe(text)
 
     if len({(p.width, p.height) for p in pages}) > 1:
         warnings.append(
