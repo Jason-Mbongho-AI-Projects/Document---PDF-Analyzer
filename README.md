@@ -355,8 +355,8 @@ stores no secrets.
 ## Testing
 
 ```bash
-.venv\Scripts\python -m pytest tests/ test_app.py -q    # 657 backend
-cd frontend && npm test                                 # 73 frontend
+.venv\Scripts\python -m pytest tests/ test_app.py -q    # 716 backend
+cd frontend && npm test                                 # 87 frontend
 ```
 
 Tests open their outputs with the library that owns the format — python-docx
@@ -429,11 +429,24 @@ verbatim is discarded.
 **Analysis separates fact from inference.** What the document states and what
 the model concluded are returned, and displayed, separately.
 
-**Replacement text cannot always match.** Embedded fonts are usually
-subsetted, so new glyphs cannot be added to them. Edited text is drawn in a
-standard font matched for size, colour and position, and the API names the
-font it used. PDF text does not reflow, so a longer replacement is scaled to
-fit and warned about when it cannot be.
+**Edited text keeps the document's font where it can.** The replacement is
+written into the page's own text, inheriting the original typeface, size and
+position exactly, and staying in the reading order so the edited document
+still copies, searches, exports and summarises as a sentence. Three cases fall
+back to drawing over the page in a standard font: an embedded font, which is
+usually subsetted and cannot be given glyphs it does not carry; a replacement
+too wide for the space, which can only be shrunk by being drawn; and a font,
+size or colour chosen in the panel, which must be honoured rather than
+silently replaced by the document's. The API says which happened. PDF text
+does not reflow, so a longer replacement is scaled to fit and warned about
+when it cannot be.
+
+**An edit that cannot be applied is refused.** A document whose fonts encode
+their own byte values — LibreOffice output is the common case — has no ASCII
+words in its content stream to find, so nothing can be changed there without
+rebuilding the font. The check after every edit catches it: the result is
+discarded and the caller told, rather than being handed a document that looks
+edited and is not.
 
 **Signing is visible, not cryptographic.** It applies a signature image and
 records a tamper-evident audit trail with the document hash frozen at send

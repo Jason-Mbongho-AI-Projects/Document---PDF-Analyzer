@@ -96,9 +96,12 @@ class Occurrence:
     page: int
     text: str
     x: float
-    y: float               # baseline, PDF coordinates
+    y: float               # bottom of the glyph box, PDF coordinates
     width: float
     height: float
+    # Read from the page rather than inferred, when the page will say.
+    baseline: Optional[float] = None
+    source_size: Optional[float] = None
 
     def as_dict(self) -> dict:
         return {"page": self.page, "text": self.text,
@@ -135,6 +138,79 @@ def _window_matches(window, wanted: Sequence[str]) -> bool:
     return True
 
 
+def _page_metrics(data: bytes) -> Dict[int, list]:
+    """Read every character's baseline and point size straight from the page.
+
+    Both were previously inferred: the size from the measured ink width, the
+    baseline by pushing the bottom of the glyph box down by a descender. Both
+    are wrong in the ordinary case. Ink width is narrower than the advance
+    width, so the size came out a few tenths short; and the glyph box only sits
+    a descender below the baseline when the matched text actually contains a
+    descender, so "four." was raised two points and set small -- a visible
+    superscript next to the text it replaced.
+
+    PDFium knows both exactly. This asks it once per document and caches the
+    answer per page.
+    """
+    import ctypes
+
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    metrics: Dict[int, list] = {}
+    document = pdfium.PdfDocument(data)
+    try:
+        for index in range(len(document)):
+            page = document[index]
+            text_page = page.get_textpage()
+            chars = []
+            for position in range(text_page.count_chars()):
+                glyph = text_page.get_text_range(position, 1)
+                if not glyph.strip():
+                    continue
+                x = ctypes.c_double()
+                y = ctypes.c_double()
+                raw.FPDFText_GetCharOrigin(
+                    text_page.raw, position, ctypes.byref(x), ctypes.byref(y))
+                chars.append((
+                    glyph,
+                    x.value,
+                    y.value,
+                    raw.FPDFText_GetFontSize(text_page.raw, position),
+                    text_page.get_charbox(position),
+                ))
+            metrics[index + 1] = chars
+    finally:
+        document.close()
+
+    return metrics
+
+
+def _measure(chars: list, x: float, y: float,
+             width: float, height: float) -> Tuple[Optional[float], Optional[float]]:
+    """The baseline and point size of the text inside a region.
+
+    Returns (None, None) when nothing sits there, so the caller can fall back
+    to inference rather than placing text on a guessed line.
+    """
+    inside = [
+        (origin_y, size)
+        for _, origin_x, origin_y, size, box in chars
+        if x - 1 <= origin_x <= x + width + 1
+        and y - 2 <= box[1] and box[3] <= y + height + 2
+    ]
+    if not inside:
+        return None, None
+
+    # The commonest value, not the mean: one stray character from the line
+    # above should not drag the baseline half a line up.
+    def commonest(values):
+        rounded = [round(v, 2) for v in values]
+        return max(set(rounded), key=rounded.count)
+
+    return commonest([b for b, _ in inside]), commonest([s for _, s in inside])
+
+
 def find_text(data: bytes, needle: str,
               page: Optional[int] = None) -> List[Occurrence]:
     """Locate a phrase and return where it sits, in PDF coordinates.
@@ -148,6 +224,7 @@ def find_text(data: bytes, needle: str,
 
     wanted = needle.split()
     found: List[Occurrence] = []
+    metrics = _page_metrics(data)
 
     for page_text in extract(data):
         if page is not None and page_text.page != page:
@@ -163,9 +240,12 @@ def find_text(data: bytes, needle: str,
             x1 = max(w.x1 for w in window)
             y0 = min(w.y0 for w in window)
             y1 = max(w.y1 for w in window)
+            baseline, size = _measure(
+                metrics.get(page_text.page, []), x0, y0, x1 - x0, y1 - y0)
             found.append(Occurrence(
                 page=page_text.page, text=" ".join(w.text for w in window),
                 x=x0, y=y0, width=x1 - x0, height=y1 - y0,
+                baseline=baseline, source_size=size,
             ))
 
     return found
@@ -187,13 +267,65 @@ def _space_equivalent(term: str) -> int:
     return len(term)
 
 
+def _keeps_its_own_font(data: bytes, page_number: int) -> bool:
+    """Can the replacement be written into the page's own text?
+
+    Only when every font on the page is one of the standard faces the viewer
+    supplies rather than an embedded subset. An embedded subset carries only
+    the glyphs the document already used, and nothing can add to it, so a new
+    character would come out blank or as a notdef box. A non-embedded Type1 is
+    resolved by the reader from a full font, so any Latin character it is
+    asked for will be there.
+    """
+    try:
+        with pikepdf.open(io.BytesIO(data)) as pdf:
+            if page_number < 1 or page_number > len(pdf.pages):
+                return False
+            page = pdf.pages[page_number - 1]
+            fonts = dict(page.get("/Resources", {}).get("/Font", {}))
+            if not fonts:
+                return False
+            for font in fonts.values():
+                if str(font.get("/Subtype", "")) == "/Type0":
+                    return False          # composite encoding, not byte-per-glyph
+                descriptor = font.get("/FontDescriptor", {})
+                if any(key in descriptor
+                       for key in ("/FontFile", "/FontFile2", "/FontFile3")):
+                    return False
+            return True
+    except Exception:
+        return False
+
+
+def _is_default_style(style: Style) -> bool:
+    """True when the caller expressed no opinion about how it should look.
+
+    A font, size or colour chosen in the panel is an instruction. Writing the
+    replacement into the page's own text would silently ignore it, so that
+    path is only taken when nothing was asked for.
+    """
+    return (style.size is None and style.colour.lower() in ("#000000", "#000")
+            and not style.bold and not style.italic
+            and style.font == "Helvetica")
+
+
 def _strip_selected(raw: bytes, term: str, wanted: Optional[set],
-                    counter: Dict[str, int]) -> Tuple[bytes, bool]:
+                    counter: Dict[str, int],
+                    replacement: str = "") -> Tuple[bytes, bool]:
     """Blank occurrences of `term`, honouring which ones were asked for.
 
     `counter` carries the running match index across the whole page, because
     an occurrence is numbered within the page, not within one string operand.
     `wanted` of None means every occurrence.
+
+    With a `replacement`, the new text is written into the string operand
+    where the old text stood, instead of the old text being blanked and the
+    new drawn over the top. That is worth doing wherever it is safe: the
+    replacement then inherits the document's own font, size, colour and
+    position exactly, and -- the part that matters beyond appearance -- it
+    sits in the page's reading order, so copying, searching, exporting and
+    asking questions about the edited document all see a sentence rather than
+    a word stranded at the end of the page.
     """
     try:
         text = raw.decode("latin-1")
@@ -208,7 +340,8 @@ def _strip_selected(raw: bytes, term: str, wanted: Optional[set],
     # of a digit or letter, so blanking "4200" with four spaces shortens the
     # line and drags everything after it leftwards — straight into the
     # replacement text being drawn in that spot.
-    padding = " " * _space_equivalent(term)
+    padding = " " * max(0, _space_equivalent(term) - _space_equivalent(replacement))
+    written = replacement + padding
 
     changed = False
     position = lowered.find(needle)
@@ -217,10 +350,10 @@ def _strip_selected(raw: bytes, term: str, wanted: Optional[set],
         counter[term] = index + 1
 
         if wanted is None or index in wanted:
-            text = text[:position] + padding + text[position + len(term):]
+            text = text[:position] + written + text[position + len(term):]
             lowered = text.lower()
             changed = True
-            position = lowered.find(needle, position + len(padding))
+            position = lowered.find(needle, position + len(written))
         else:
             position = lowered.find(needle, position + len(term))
 
@@ -228,9 +361,14 @@ def _strip_selected(raw: bytes, term: str, wanted: Optional[set],
 
 
 def _remove_from_streams(
-    data: bytes, per_page: Dict[int, List[Tuple[str, Optional[set]]]],
+    data: bytes,
+    per_page: Dict[int, List[Tuple[str, Optional[set], str]]],
 ) -> bytes:
-    """Delete the selected occurrences of each term from the content stream."""
+    """Rewrite the selected occurrences of each term in the content stream.
+
+    A term paired with an empty replacement is blanked; one paired with text
+    has that text written in its place.
+    """
     with pikepdf.open(io.BytesIO(data)) as pdf:
         for index, page in enumerate(pdf.pages, start=1):
             targets = per_page.get(index)
@@ -251,9 +389,9 @@ def _remove_from_streams(
                     for position, operand in enumerate(operands):
                         if isinstance(operand, pikepdf.String):
                             value = bytes(operand)
-                            for term, wanted in targets:
+                            for term, wanted, swap in targets:
                                 value, hit = _strip_selected(
-                                    value, term, wanted, counters)
+                                    value, term, wanted, counters, swap)
                                 changed = changed or hit
                             if value != bytes(operand):
                                 operands[position] = pikepdf.String(value)
@@ -263,9 +401,9 @@ def _remove_from_streams(
                             for inner, item in enumerate(items):
                                 if isinstance(item, pikepdf.String):
                                     value = bytes(item)
-                                    for term, wanted in targets:
+                                    for term, wanted, swap in targets:
                                         value, hit = _strip_selected(
-                                            value, term, wanted, counters)
+                                            value, term, wanted, counters, swap)
                                         item_changed = item_changed or hit
                                     if value != bytes(item):
                                         items[inner] = pikepdf.String(value)
@@ -331,6 +469,9 @@ def _infer_size(spot: Occurrence, font: str = "Helvetica") -> float:
     different heights. Width scales cleanly with point size, and the original
     string is known, so one division gives the answer.
     """
+    if spot.source_size:
+        return round(spot.source_size, 1)
+
     if spot.text and spot.width > 0:
         try:
             unit = pdfmetrics.stringWidth(spot.text, font, 1.0)
@@ -351,6 +492,9 @@ def _baseline(spot: Occurrence, font: str, size: float) -> float:
     low, which is small but immediately visible next to the untouched text on
     the same line.
     """
+    if spot.baseline is not None:
+        return spot.baseline
+
     try:
         _, descent = pdfmetrics.getAscentDescent(font, size)
         return spot.y - descent          # descent is negative
@@ -382,7 +526,7 @@ def apply_edits(data: bytes, edits: Sequence[Edit],
     if not edits:
         raise PDFEngineError("No edits were supplied.")
 
-    removals: Dict[int, List[Tuple[str, Optional[set]]]] = {}
+    removals: Dict[int, List[Tuple[str, Optional[set], str]]] = {}
     drawings: Dict[int, List[Tuple[Occurrence, str, Style]]] = {}
     report: List[dict] = []
 
@@ -408,7 +552,21 @@ def apply_edits(data: bytes, edits: Sequence[Edit],
         else:
             wanted = None
 
-        removals.setdefault(edit.page, []).append((edit.find, wanted))
+        # Writing the new text into the page's own text is better in every
+        # way it can be done -- exact font, exact position, right reading
+        # order -- so it is the first choice. Drawing over the top is the
+        # fallback, and it is still needed three ways: an embedded subset
+        # cannot be given new glyphs; a caller who chose a font, size or
+        # colour must get it; and a replacement too wide for the space can
+        # only be shrunk by being drawn, since text written into the page
+        # inherits the size of what it replaced and cannot be made smaller.
+        fits = _space_equivalent(edit.replace) <= _space_equivalent(edit.find)
+        in_place = (bool(edit.replace) and fits
+                    and _is_default_style(edit.style)
+                    and _keeps_its_own_font(data, edit.page))
+
+        removals.setdefault(edit.page, []).append(
+            (edit.find, wanted, edit.replace if in_place else ""))
 
         for spot in spots:
             size = edit.style.size or _infer_size(spot, edit.style.resolved_font())
@@ -421,6 +579,16 @@ def apply_edits(data: bytes, edits: Sequence[Edit],
                 "size": size if edit.replace else None,
                 "overflows": False,
             }
+
+            if in_place:
+                entry["font"] = None      # the page's own font, unchanged
+                entry["in_place"] = True
+                entry["note"] = (
+                    "The replacement was written into the page's own text, so "
+                    "it keeps the original font and stays in reading order."
+                )
+                report.append(entry)
+                continue
 
             if edit.replace:
                 style = edit.style

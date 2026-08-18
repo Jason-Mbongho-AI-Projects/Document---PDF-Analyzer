@@ -5,9 +5,10 @@
  * editing is not word processing and pretending otherwise produces nasty
  * surprises. Two facts drive the design:
  *
- *   * Replacement text is drawn in a standard font. An embedded font is
- *     usually subsetted and cannot be extended, so the original typeface
- *     cannot always be reused. The font actually used is shown, not hidden.
+ *   * The replacement keeps the document's own font when the page allows it,
+ *     and is drawn in a standard font when it does not — an embedded font is
+ *     usually subsetted and cannot be given glyphs it does not carry. Which
+ *     of the two happened is shown, not hidden.
  *
  *   * Text does not reflow. A longer replacement can overrun what follows, so
  *     the width is compared before saving and a warning is shown rather than
@@ -201,10 +202,13 @@ export function TextEditPanel({
 
       <div className="notice" style={{ marginTop: 14 }}>
         <span className="small">
-          Removed text is deleted from the file, not covered over. New text is
-          drawn in the font chosen above — a PDF's own fonts are usually
-          subsetted and cannot be extended, so an exact match to an unusual
-          typeface is not always possible. Text does not reflow: a longer
+          Removed text is deleted from the file, not covered over. Where it
+          can be done, the new text is written into the page's own text, so it
+          keeps the original typeface and stays in the document's reading
+          order. Where it cannot — an embedded font that cannot be given new
+          glyphs, a replacement too wide to fit, or a font, size or colour
+          chosen above — it is drawn over the page in the font shown instead.
+          You are told which happened. Text does not reflow: a longer
           replacement may overlap what follows, and you will be told when that
           is likely.
         </span>

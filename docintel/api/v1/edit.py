@@ -676,8 +676,12 @@ def edit_text(document_id: str, body: TextEditRequest, request: Request,
     session.refresh(document)
 
     fonts = sorted({r["font"] for r in report if r["font"]})
+    kept = [r for r in report if r.get("in_place")]
     overflow = [r for r in report if r.get("overflows")]
     note = f"{changed} replacement(s) and {removed} deletion(s), verified."
+    if kept:
+        note += (f" {len(kept)} written into the page's own text, keeping the "
+                 "original font.")
     if fonts:
         note += f" Replacement text drawn in {', '.join(fonts)}."
     if overflow:
