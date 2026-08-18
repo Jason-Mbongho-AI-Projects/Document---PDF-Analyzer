@@ -9,7 +9,7 @@ driver names are the only things that need to change between the two.
 import secrets
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -74,7 +74,6 @@ class Settings(BaseSettings):
 
     # --- uploads --------------------------------------------------------
     max_upload_mb: int = 200
-    allowed_mime_types: List[str] = ["application/pdf"]
 
     # --- ai ---------------------------------------------------------------
     # Accepts either DOCINTEL_OPENROUTER_API_KEY or the bare OPENROUTER_API_KEY

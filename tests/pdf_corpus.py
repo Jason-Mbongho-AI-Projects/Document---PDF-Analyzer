@@ -268,3 +268,47 @@ def as_stream(data: bytes, name: str = "corpus.pdf"):
     stream.name = name
     stream.size = len(data)
     return stream
+
+
+# --- non-PDF fixtures, for the formats the uploader now converts ------------
+
+DOCX_SENTENCE = "Revenue rose twelve percent this quarter."
+
+
+def small_docx() -> bytes:
+    """A minimal Word document containing DOCX_SENTENCE."""
+    import io
+
+    from docx import Document
+
+    document = Document()
+    document.add_heading("Quarterly review", 0)
+    document.add_paragraph(DOCX_SENTENCE)
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def small_xlsx() -> bytes:
+    """A one-sheet workbook with a header row and one row of data."""
+    import io
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet["A1"], sheet["B1"] = "Region", "Total"
+    sheet["A2"], sheet["B2"] = "North", 128400
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def small_png(size: tuple = (400, 300)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "white").save(buffer, "PNG")
+    return buffer.getvalue()

@@ -380,9 +380,15 @@ def to_images(data: bytes, fmt: str = "png", scale: float = 2.0,
 # -------------------------------------------------------------- to PDF
 
 def text_to_pdf(text: str, *, title: str = "", page_size: str = "letter") -> bytes:
+    """Lay out plain text, honouring the small amount of Markdown people type.
+
+    Headings (#, ##, ###) and bullets (-, *) are recognised because someone
+    typing a document in a text box reaches for them without being asked to.
+    Nothing else is interpreted: the rest is escaped and set as body text.
+    """
     from reportlab.lib.pagesizes import A4, LETTER
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    from reportlab.platypus import ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer
 
     sizes = {"letter": LETTER, "a4": A4}
     if page_size not in sizes:
@@ -397,14 +403,47 @@ def text_to_pdf(text: str, *, title: str = "", page_size: str = "letter") -> byt
     if title:
         flow += [Paragraph(html_module.escape(title), styles["Title"]), Spacer(1, 12)]
 
-    for block in text.split("\n\n"):
-        block = block.strip()
-        if not block:
-            continue
+    def escape(value: str) -> str:
         # Escape first: user content must never be interpreted as reportlab
         # markup.
-        safe = html_module.escape(block).replace("\n", "<br/>")
-        flow += [Paragraph(safe, styles["BodyText"]), Spacer(1, 8)]
+        return html_module.escape(value)
+
+    for block in text.split("\n\n"):
+        block = block.strip("\n")
+        if not block.strip():
+            continue
+
+        lines = [line.rstrip() for line in block.split("\n")]
+        bullets = [line for line in lines if line.lstrip()[:2] in ("- ", "* ")]
+
+        if bullets and len(bullets) == len([l for l in lines if l.strip()]):
+            items = [
+                ListItem(Paragraph(escape(line.lstrip()[2:].strip()), styles["BodyText"]))
+                for line in lines if line.strip()
+            ]
+            flow += [ListFlowable(items, bulletType="bullet", leftIndent=18),
+                     Spacer(1, 8)]
+            continue
+
+        # A heading is a block whose first line opens with hashes. Any
+        # remaining lines are treated as the paragraph that follows it.
+        heading = None
+        if lines and lines[0].lstrip().startswith("#"):
+            marker = lines[0].lstrip()
+            level = len(marker) - len(marker.lstrip("#"))
+            body = marker[level:].strip()
+            if body and level <= 3:
+                heading = (min(level, 3), body)
+                lines = lines[1:]
+
+        if heading:
+            level, body = heading
+            flow += [Paragraph(escape(body), styles[f"Heading{level}"]), Spacer(1, 4)]
+
+        remainder = "\n".join(lines).strip()
+        if remainder:
+            safe = escape(remainder).replace("\n", "<br/>")
+            flow += [Paragraph(safe, styles["BodyText"]), Spacer(1, 8)]
 
     if not flow:
         flow = [Paragraph("(empty document)", styles["BodyText"])]
@@ -698,6 +737,145 @@ def convert(data: bytes, target: str, *, filename: str = "document",
     )
 
 
+# --- reading office formats without LibreOffice -----------------------------
+#
+# LibreOffice reproduces layout, and nothing in pure Python comes close. But
+# requiring it to be installed would mean a Word document cannot even be read
+# on a server that does not have it, and reading is the point. So when it is
+# absent, the text and tables are pulled out with the libraries already in the
+# stack and set as a plain document. It is a legible copy, not a facsimile,
+# and it says so.
+
+FALLBACK_NOTE = (
+    "Converted without LibreOffice: the text and tables are here, "
+    "the original layout is not."
+)
+
+
+def _docx_text(raw: bytes) -> str:
+    from docx import Document as DocxDocument
+
+    document = DocxDocument(io.BytesIO(raw))
+    blocks = []
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if not text:
+            continue
+        style = (paragraph.style.name or "").lower()
+        if style.startswith("heading 1") or style == "title":
+            blocks.append("# " + text)
+        elif style.startswith("heading 2"):
+            blocks.append("## " + text)
+        elif style.startswith("heading"):
+            blocks.append("### " + text)
+        elif style.startswith("list"):
+            blocks.append("- " + text)
+        else:
+            blocks.append(text)
+
+    for table in document.tables:
+        rows = [" | ".join(cell.text.strip() for cell in row.cells)
+                for row in table.rows]
+        rows = [row for row in rows if row.strip(" |")]
+        if rows:
+            blocks.append("\n".join(rows))
+
+    return "\n\n".join(blocks)
+
+
+def _xlsx_text(raw: bytes) -> str:
+    from openpyxl import load_workbook
+
+    book = load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+    blocks = []
+    for sheet in book.worksheets:
+        rows = []
+        for row in sheet.iter_rows(values_only=True):
+            cells = ["" if value is None else str(value) for value in row]
+            if any(cell.strip() for cell in cells):
+                rows.append(" | ".join(cells).rstrip(" |"))
+        if rows:
+            blocks.append("## " + str(sheet.title))
+            blocks.append("\n".join(rows))
+    book.close()
+    return "\n\n".join(blocks)
+
+
+def _pptx_text(raw: bytes) -> str:
+    from pptx import Presentation
+
+    presentation = Presentation(io.BytesIO(raw))
+    blocks = []
+    for number, slide in enumerate(presentation.slides, start=1):
+        lines = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in paragraph.runs).strip()
+                    if text:
+                        lines.append(text)
+        blocks.append(f"## Slide {number}")
+        blocks.append("\n".join(lines) if lines else "(no text)")
+    return "\n\n".join(blocks)
+
+
+def _html_text(raw: bytes) -> str:
+    """Strip markup to text. Script and style content is dropped, not shown."""
+    import re
+
+    source = raw.decode("utf-8", errors="replace")
+    source = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", source)
+    source = re.sub(r"(?is)<br\s*/?>", "\n", source)
+    source = re.sub(r"(?is)</(p|div|li|tr|h[1-6])>", "\n\n", source)
+    source = re.sub(r"(?is)<li\b[^>]*>", "- ", source)
+    source = re.sub(r"(?s)<[^>]+>", " ", source)
+    source = html_module.unescape(source)
+    lines = [line.strip() for line in source.split("\n")]
+    text = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _rtf_text(raw: bytes) -> str:
+    """Enough of RTF to recover the words: drop groups, controls and escapes."""
+    import re
+
+    source = raw.decode("latin-1", errors="replace")
+    source = re.sub(r"\\'([0-9a-fA-F]{2})",
+                    lambda m: chr(int(m.group(1), 16)), source)
+    source = re.sub(r"\\par[d]?\b", "\n", source)
+    source = re.sub(r"\\[a-zA-Z]+-?\d* ?", " ", source)
+    source = source.replace("{", " ").replace("}", " ")
+    lines = [line.strip() for line in source.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+_FALLBACK_READERS = {
+    "docx": _docx_text, "xlsx": _xlsx_text, "pptx": _pptx_text,
+    "html": _html_text, "htm": _html_text, "rtf": _rtf_text,
+}
+
+
+def office_to_pdf_without_libreoffice(raw: bytes, extension: str,
+                                      *, title: str = "") -> bytes:
+    """Best-effort conversion for the formats we can read ourselves."""
+    reader = _FALLBACK_READERS.get(extension.lower().lstrip("."))
+    if reader is None:
+        raise PDFEngineError(OFFICE_UNAVAILABLE)
+
+    try:
+        text = reader(raw)
+    except PDFEngineError:
+        raise
+    except Exception as exc:
+        raise PDFEngineError(
+            f"This .{extension} file could not be read: {exc}") from exc
+
+    if not text.strip():
+        text = "(this document contains no extractable text)"
+
+    return text_to_pdf(text + "\n\n" + FALLBACK_NOTE, title=title)
+
+
 TO_PDF_EXTENSIONS = {
     "txt": "text", "md": "text", "markdown": "text", "text": "text",
     "csv": "csv",
@@ -726,4 +904,10 @@ def to_pdf(raw: bytes, source_extension: str, *, title: str = "") -> bytes:
         return csv_to_pdf(raw, title=title)
     if kind == "image":
         return images_to_pdf([raw])
-    return office_to_pdf(raw, extension)
+
+    try:
+        return office_to_pdf(raw, extension)
+    except PDFEngineError:
+        # LibreOffice missing or unable to handle this file. Recovering the
+        # text is far better than refusing the document outright.
+        return office_to_pdf_without_libreoffice(raw, extension, title=title)

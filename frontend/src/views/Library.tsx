@@ -1,5 +1,5 @@
 /**
- * Document library: upload, browse, open, archive and delete.
+ * Document library: create, upload, browse, open, archive and delete.
  *
  * Delete is permanent — it removes the database rows and every stored byte
  * including all versions — so it is always behind an explicit confirmation
@@ -9,7 +9,17 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type DocumentSummary, type Workspace } from "../api";
+import { NewDocumentDialog } from "../components/NewDocumentDialog";
 import { Thumbnail } from "../components/Thumbnail";
+
+/* What the picker offers. The server checks the bytes rather than trusting
+   any of this, so the list is a convenience for the file dialog, not the
+   security boundary. */
+const ACCEPTED = [
+  "application/pdf",
+  ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.rtf,.txt,.md,.csv,.html,.htm",
+  ".png,.jpg,.jpeg,.tif,.tiff,.webp,.bmp,.gif",
+].join(",");
 
 interface Props {
   workspace: Workspace;
@@ -34,6 +44,7 @@ export function Library({ workspace, onOpen, notify }: Props) {
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [composing, setComposing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -165,10 +176,16 @@ export function Library({ workspace, onOpen, notify }: Props) {
             Archived
           </label>
           {/* Upload is the primary action, so it sits where the eye lands
-              rather than inside a panel competing with the documents. */}
+              rather than inside a panel competing with the documents.
+              Creating is offered beside it because an empty workspace has
+              nothing to upload yet. */}
+          <button className="btn" disabled={busy}
+            onClick={() => setComposing(true)}>
+            New document
+          </button>
           <button className="btn primary" disabled={busy}
             onClick={() => fileRef.current?.click()}>
-            {busy ? "Working…" : "Upload PDFs"}
+            {busy ? "Working…" : "Upload"}
           </button>
         </div>
       </div>
@@ -200,7 +217,7 @@ export function Library({ workspace, onOpen, notify }: Props) {
         </div>
       )}
 
-      <input ref={fileRef} type="file" accept="application/pdf" multiple hidden
+      <input ref={fileRef} type="file" accept={ACCEPTED} multiple hidden
         onChange={(e) => upload(e.target.files)} />
 
       {/* Dropping still works anywhere on the library. The target only becomes
@@ -212,7 +229,9 @@ export function Library({ workspace, onOpen, notify }: Props) {
           <div className="drop-veil-inner">
             <strong>Drop to upload</strong>
             <span className="small muted">
-              PDF only — content is checked by magic bytes, not by filename.
+              PDF, Word, Excel, PowerPoint, text, HTML or an image — anything
+              else becomes a PDF on arrival. Content is checked by magic bytes,
+              not by filename.
             </span>
           </div>
         </div>
@@ -227,15 +246,22 @@ export function Library({ workspace, onOpen, notify }: Props) {
           <p className="small">
             {showArchived
               ? "Documents you archive will appear here."
-              : "Drop a PDF anywhere on this page, or upload one to begin. " +
-                "You can read, edit, redact, sign, convert and ask questions " +
-                "about anything you add."}
+              : "Drop a file anywhere on this page, upload one, or write a " +
+                "new document from scratch. Word, Excel, PowerPoint, text, " +
+                "HTML and images all become PDFs on arrival, so you can read, " +
+                "edit, redact, sign, convert and ask questions about any of them."}
           </p>
           {!showArchived && (
-            <button className="btn primary" disabled={busy}
-              onClick={() => fileRef.current?.click()}>
-              {busy ? "Working…" : "Upload your first PDF"}
-            </button>
+            <div className="row" style={{ justifyContent: "center" }}>
+              <button className="btn primary" disabled={busy}
+                onClick={() => fileRef.current?.click()}>
+                {busy ? "Working…" : "Upload a document"}
+              </button>
+              <button className="btn" disabled={busy}
+                onClick={() => setComposing(true)}>
+                Create one instead
+              </button>
+            </div>
           )}
         </div>
       ) : (
@@ -313,6 +339,15 @@ export function Library({ workspace, onOpen, notify }: Props) {
             </div>
           ))}
         </div>
+      )}
+
+      {composing && (
+        <NewDocumentDialog
+          workspaceId={workspace.id}
+          notify={notify}
+          onClose={() => setComposing(false)}
+          onCreated={(id) => { setComposing(false); load(); onOpen(id); }}
+        />
       )}
 
       {pendingDelete && (

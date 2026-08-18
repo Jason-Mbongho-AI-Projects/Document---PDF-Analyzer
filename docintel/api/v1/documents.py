@@ -1,5 +1,5 @@
 """Document endpoints: upload, list, inspect, download, delete."""
-from typing import List, Optional
+from typing import List, Literal, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile, status
@@ -13,7 +13,7 @@ from docintel.api.schemas import (
 from docintel.config import settings
 from docintel.core import audit
 from docintel.core.deps import CurrentUser, DbSession, client_ip, require_document, require_workspace
-from docintel.core.uploads import validate_upload
+from docintel.core.uploads import sanitize_filename, validate_upload
 from docintel.db.models import (
     Document, DocumentStatus, DocumentVersion, JobType, SecurityFinding,
 )
@@ -54,17 +54,52 @@ async def upload_document(
         session.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
 
+    # Everything downstream — the viewer, editing, redaction, signing — works
+    # on PDF. Anything else convertible is turned into one at the door, so the
+    # rest of the platform never has to care what was uploaded.
+    original_name = result.safe_filename
+    source_format = result.detected_type
+    converted_from = None
+
+    if source_format != "pdf":
+        from docintel.pdf import convert as convert_tools
+
+        try:
+            data = convert_tools.to_pdf(
+                data, source_format,
+                title=original_name.rsplit(".", 1)[0],
+            )
+        except PDFEngineError as exc:
+            audit.record(session, action="document.upload", actor=user,
+                         workspace_id=workspace_id, result="rejected",
+                         detail=f"{source_format} conversion failed",
+                         ip_address=client_ip(request))
+            session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"This {source_format.upper()} file could not be "
+                       f"converted to a PDF: {exc}",
+            ) from exc
+
+        converted_from = source_format
+        stored_name = original_name.rsplit(".", 1)[0] + ".pdf"
+    else:
+        stored_name = original_name
+
     digest = content_hash(data)
 
     document = Document(
         workspace_id=workspace_id,
         uploaded_by=user.id,
-        filename=result.safe_filename,
-        mime_type=result.detected_type,
+        filename=stored_name,
+        mime_type="application/pdf",
         size_bytes=len(data),
         content_hash=digest,
         status=DocumentStatus.PROCESSING,
-        doc_metadata={},
+        doc_metadata=(
+            {"converted_from": converted_from, "original_filename": original_name}
+            if converted_from else {}
+        ),
     )
     session.add(document)
     session.flush()
@@ -93,6 +128,96 @@ async def upload_document(
     audit.record(session, action="document.upload", actor=user, workspace_id=workspace_id,
                  document_id=document.id, detail=f"{len(data)} bytes",
                  ip_address=client_ip(request))
+    session.commit()
+    session.refresh(document)
+
+    return DocumentUploadResponse(
+        document=DocumentResponse.model_validate(document), jobs=jobs
+    )
+
+
+class CreateRequest(BaseModel):
+    """A document composed here rather than uploaded."""
+    workspace_id: str = Field(min_length=8, max_length=64)
+    filename: str = Field(default="Untitled.pdf", max_length=200)
+    title: str = Field(default="", max_length=300)
+    # Markdown-ish: headings, paragraphs and bullets. Empty means blank pages.
+    content: str = Field(default="", max_length=500_000)
+    blank_pages: int = Field(default=1, ge=1, le=200)
+    page_size: Literal["letter", "a4"] = "letter"
+
+
+@router.post("/create", response_model=DocumentUploadResponse,
+             status_code=status.HTTP_201_CREATED)
+def create_document(
+    body: CreateRequest,
+    request: Request,
+    user: CurrentUser,
+    session: DbSession,
+) -> DocumentUploadResponse:
+    """Make a new PDF from typed content, or a blank one to work on.
+
+    Declared before /{document_id} so the literal path is matched first.
+    """
+    from docintel.pdf import assemble
+    from docintel.pdf import convert as convert_tools
+    from docintel.pdf.engine import PDFEngineError
+
+    require_workspace(session, user, body.workspace_id, write=True)
+
+    try:
+        if body.content.strip():
+            data = convert_tools.text_to_pdf(
+                body.content, title=body.title.strip(),
+                page_size=body.page_size)
+            label = "created"
+        else:
+            # A single blank page to build on, then any others asked for.
+            data = convert_tools.text_to_pdf(
+                body.title.strip() or " ", title="", page_size=body.page_size)
+            if body.blank_pages > 1:
+                data = assemble.insert_blank(
+                    data, after=1, count=body.blank_pages - 1)
+            label = "blank"
+    except PDFEngineError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=str(exc)) from exc
+
+    name = sanitize_filename(body.filename or "Untitled.pdf")
+    if not name.lower().endswith(".pdf"):
+        name = name.rsplit(".", 1)[0] + ".pdf" if "." in name else name + ".pdf"
+
+    digest = content_hash(data)
+    document = Document(
+        workspace_id=body.workspace_id,
+        uploaded_by=user.id,
+        filename=name,
+        mime_type="application/pdf",
+        size_bytes=len(data),
+        content_hash=digest,
+        status=DocumentStatus.PROCESSING,
+        doc_metadata={"created_in_app": True},
+    )
+    session.add(document)
+    session.flush()
+
+    key = build_key(body.workspace_id, document.id, 1, "original")
+    storage.put(key, data)
+    session.add(DocumentVersion(
+        document_id=document.id, version=1, label=label,
+        storage_key=key, size_bytes=len(data), content_hash=digest,
+    ))
+
+    jobs = [
+        queue.enqueue(session, workspace_id=body.workspace_id, job_type=job_type,
+                      document_id=document.id,
+                      idempotency_key=f"{job_type.value}:{document.id}").id
+        for job_type in (JobType.INGEST, JobType.SECURITY_SCAN)
+    ]
+
+    audit.record(session, action="document.created", actor=user,
+                 workspace_id=body.workspace_id, document_id=document.id,
+                 detail=label, ip_address=client_ip(request))
     session.commit()
     session.refresh(document)
 

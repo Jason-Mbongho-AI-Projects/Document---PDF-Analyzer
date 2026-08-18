@@ -546,6 +546,21 @@ export const api = {
     });
   },
 
+  /** Build a document here rather than uploading one. */
+  createDocument(body: {
+    workspace_id: string;
+    filename?: string;
+    title?: string;
+    content?: string;
+    blank_pages?: number;
+    page_size?: "letter" | "a4";
+  }) {
+    return request<{ document: DocumentSummary; jobs: string[] }>(
+      "/api/v1/documents/create",
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
+
   /** Permanent: removes the database rows AND every stored byte. */
   deleteDocument: (id: string) =>
     request<void>(`/api/v1/documents/${id}`, { method: "DELETE" }),

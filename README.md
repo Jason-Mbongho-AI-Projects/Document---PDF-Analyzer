@@ -39,6 +39,19 @@ Tools are grouped by the job they do, which is how the interface presents them.
 | **Forms** | Fill a form, build a form, sign or request signatures |
 | **Secure** | Security scan, redact, properties and hidden data, links and attachments |
 | **Convert** | Export to nine formats, OCR |
+| **Create** | Write a new document, or start from blank pages |
+
+**Bring anything in** — PDF, Word, Excel, PowerPoint, RTF, ODT, HTML, plain
+text, Markdown, CSV and images. Whatever arrives is converted to PDF at the
+door, so every tool below works on it regardless of what it started as. What
+the file *is* decides this, not what it is called: the magic bytes are read,
+an executable renamed `.pdf` is refused, and a PDF named `.exe` is stored with
+the extension its content warrants.
+
+**Start from nothing** — write a document in the app and get a PDF: a title,
+Markdown-ish headings and bullets, Letter or A4. Or ask for blank pages to
+draw, stamp and sign on. Either way the result is an ordinary document in the
+library with the full toolset available to it.
 
 **Read** — PDF.js viewer with a real text layer, page thumbnails, search with
 highlight rectangles, snapshot any region to an image, measure distances in
@@ -69,7 +82,10 @@ carries and a way to strip it.
 
 **Convert** — PDF to text, Markdown, HTML, JSON, CSV, XLSX, DOCX, PPTX and
 images; text, Markdown, CSV, images and office files to PDF; OCR for scans;
-deskew, despeckle and contrast for poor ones.
+deskew, despeckle and contrast for poor ones. Office conversion uses
+LibreOffice when it is installed, and falls back to reading the file directly
+with python-docx, openpyxl and python-pptx when it is not — text and tables
+survive, layout does not, and the result says so on the page.
 
 **On a phone** — the thumbnail rail and tools panel become drawers rather than
 disappearing, the first page fits the viewport, and every drag gesture works
@@ -368,7 +384,7 @@ All permissive and safe for commercial distribution.
 | pypdfium2 | BSD-3 / Apache-2.0 | rasterisation (PDFium) |
 | pdfplumber | MIT | table detection |
 | reportlab | BSD | overlays and generated documents |
-| python-docx, openpyxl, python-pptx | MIT | Office output |
+| python-docx, openpyxl, python-pptx | MIT | Office output, and reading Office input without LibreOffice |
 | Pillow | MIT-CMU | image handling |
 | numpy | BSD-3 | scan analysis |
 | cryptography | Apache-2.0 / BSD-3 | reading AES-protected PDFs |
@@ -429,9 +445,22 @@ each dark pixel. Where print is so fine that its strokes are as thin as the
 specks, the two are not distinguishable and some of that text will thin.
 Scanning at a higher resolution is the fix.
 
-**Unavailable features say why.** OCR needs Tesseract; office-to-PDF needs
-LibreOffice. Without them the API returns 503 with install instructions rather
-than empty results that look like success.
+**Unavailable features say why.** OCR needs Tesseract. Without it the API
+returns 503 with install instructions rather than empty results that look like
+success.
+
+**Office conversion degrades rather than refusing.** LibreOffice reproduces
+layout and nothing in pure Python comes close, so it is used whenever it is
+installed. When it is not, `.docx`, `.xlsx`, `.pptx`, `.html` and `.rtf` are
+read directly with the libraries already in the stack: the text, headings and
+tables come through, the layout does not, and the converted document carries a
+line saying so. `.doc`, `.xls`, `.ppt` and `.odt` have no such path and are
+refused with the reason, because inventing content is worse than saying no.
+
+**Uploads are judged by content, not by name.** An executable renamed `.pdf`
+is refused. A PDF named `.exe` is accepted and stored as `.pdf`, so nothing
+the server hands back later carries an extension its bytes do not warrant. A
+legacy `.doc` is refused with the advice to save it as `.docx`.
 
 **The viewer does not need the server.** Rendering, text selection, thumbnails
 and search run in the browser on a document this tab already holds, so they
